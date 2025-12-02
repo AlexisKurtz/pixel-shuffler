@@ -132,7 +132,7 @@
           <option value="random">Random Shuffle</option>
           <option value="brightness">Sort by Brightness</option>
           <option value="hue">Sort by Hue</option>
-          <option value="hueLayers">Hue Layers (Sand)</option> <!-- NEW -->
+          <option value="hueSand">Hue Sand (Gravity)</option> <!-- updated name -->
         </select>
       </label>
 
@@ -161,7 +161,7 @@
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.3.0';
+    const APP_VERSION = '0.4.0';
     document.getElementById('versionText').textContent = APP_VERSION;
 
     // ---- DOM elements ----------------------------------------------------
@@ -376,15 +376,15 @@
       return new ImageData(newData, width, height);
     }
 
-    // NEW: Hue Layers (Sand)
-    function transformHueLayers(imageData) {
+    // NEW: Hue Sand (Gravity)
+    function transformHueSand(imageData) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
       const numBuckets = 12; // number of hue bands
       const buckets = Array.from({ length: numBuckets }, () => []);
 
-      // Bucket pixels by hue
+      // 1) Bucket pixels by hue
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
         const r = data[offset];
@@ -397,40 +397,70 @@
         if (isNaN(bucketIndex) || bucketIndex < 0) bucketIndex = 0;
         if (bucketIndex >= numBuckets) bucketIndex = numBuckets - 1;
 
-        // Store pixel as small array to be lightweight
         buckets[bucketIndex].push([r, g, b, a]);
       }
 
-      // Shuffle inside each bucket so layers look more like "sand"
+      // 2) Shuffle inside each bucket so layers look more "grainy"
       for (let b = 0; b < numBuckets; b++) {
         shuffleArray(buckets[b]);
       }
 
-      // Fill the image row by row, bucket by bucket
+      // 3) Gravity-based stacking:
+      //    We have a "height" per column (how many pixels already stacked from bottom).
+      const heights = new Array(width).fill(0);
       const newData = new Uint8ClampedArray(data.length);
-      let p = 0; // pixel index
 
+      // Fill newData with transparent black just in case
+      for (let i = 0; i < newData.length; i += 4) {
+        newData[i] = 0;
+        newData[i + 1] = 0;
+        newData[i + 2] = 0;
+        newData[i + 3] = 255;
+      }
+
+      // Helper to find a column that still has space
+      function findColumnWithSpace(startX) {
+        let x = startX;
+        // Try random columns a few times
+        for (let i = 0; i < 10; i++) {
+          x = Math.floor(Math.random() * width);
+          if (heights[x] < height) return x;
+        }
+        // Fallback: linear scan
+        for (let col = 0; col < width; col++) {
+          if (heights[col] < height) return col;
+        }
+        return null; // full (should not really happen until we place all pixels)
+      }
+
+      // We process buckets in hue order so lower hues become lower layers.
       for (let b = 0; b < numBuckets; b++) {
         const bucket = buckets[b];
         for (let i = 0; i < bucket.length; i++) {
+          let x = Math.floor(Math.random() * width);
+          x = findColumnWithSpace(x);
+          if (x === null) {
+            // No space left (safety guard).
+            continue;
+          }
+          const columnHeight = heights[x]; // how many pixels already stacked
+
+          if (columnHeight >= height) {
+            continue;
+          }
+
+          // bottom row has index height - 1
+          const destY = (height - 1) - columnHeight;
+          const offset = (destY * width + x) * 4;
+
           const [r, g, bCh, a] = bucket[i];
-          const offset = p * 4;
           newData[offset] = r;
           newData[offset + 1] = g;
           newData[offset + 2] = bCh;
           newData[offset + 3] = a;
-          p++;
-        }
-      }
 
-      // If for some reason we didn't fill all pixels (shouldn't happen, but safety):
-      while (p < numPixels) {
-        const offset = p * 4;
-        newData[offset] = 0;
-        newData[offset + 1] = 0;
-        newData[offset + 2] = 0;
-        newData[offset + 3] = 255;
-        p++;
+          heights[x] = columnHeight + 1;
+        }
       }
 
       return new ImageData(newData, width, height);
@@ -466,8 +496,8 @@
             result = transformSortByBrightness(imageData);
           } else if (mode === 'hue') {
             result = transformSortByHue(imageData);
-          } else if (mode === 'hueLayers') {
-            result = transformHueLayers(imageData);
+          } else if (mode === 'hueSand') {
+            result = transformHueSand(imageData);
           } else {
             setStatus('Unknown mode.');
             applyBtn.disabled = false;
