@@ -177,21 +177,21 @@
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.6.0';
+    const APP_VERSION = '0.7.0';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
     document.querySelector('.js-version-footer').textContent = `v${APP_VERSION}`;
 
     // ---- DOM elements ----------------------------------------------------
-    const fileInput = document.getElementById('fileInput');
+    const fileInput   = document.getElementById('fileInput');
     const moundsSelect = document.getElementById('moundsSelect');
-    const applyBtn = document.getElementById('applyBtn');
+    const applyBtn    = document.getElementById('applyBtn');
     const downloadBtn = document.getElementById('downloadBtn');
-    const statusText = document.getElementById('statusText');
+    const statusText  = document.getElementById('statusText');
 
     const originalCanvas = document.getElementById('originalCanvas');
-    const outputCanvas = document.getElementById('outputCanvas');
-    const originalCtx = originalCanvas.getContext('2d');
-    const outputCtx = outputCanvas.getContext('2d');
+    const outputCanvas   = document.getElementById('outputCanvas');
+    const originalCtx    = originalCanvas.getContext('2d');
+    const outputCtx      = outputCanvas.getContext('2d');
 
     let imageLoaded = false;
 
@@ -199,14 +199,6 @@
 
     function setStatus(msg) {
       statusText.textContent = msg || '';
-    }
-
-    function shuffleArray(array) {
-      // Fisher-Yates shuffle
-      for (let i = array.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [array[i], array[j]] = [array[j], array[i]];
-      }
     }
 
     // RGB -> HSV helper (h: 0–360, s: 0–1, v: 0–1)
@@ -238,6 +230,11 @@
       return { h, s, v };
     }
 
+    function randomInt(min, max) {
+      // inclusive of both ends
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
     // ---- Image loading ---------------------------------------------------
 
     fileInput.addEventListener('change', (event) => {
@@ -259,10 +256,10 @@
             height = Math.round(height * scale);
           }
 
-          originalCanvas.width = width;
+          originalCanvas.width  = width;
           originalCanvas.height = height;
-          outputCanvas.width = width;
-          outputCanvas.height = height;
+          outputCanvas.width    = width;
+          outputCanvas.height   = height;
 
           originalCtx.clearRect(0, 0, width, height);
           outputCtx.clearRect(0, 0, width, height);
@@ -284,13 +281,13 @@
       setStatus('Reading image...');
     });
 
-    // ---- Sand Layers transform (global HSV + mounds & gravity-like piling) ----
+    // ---- Sand Layers transform (global HSV + falling-sand mounds) -------
 
     function transformSandLayers(imageData, moundCount) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      // 1) Build a global list of pixels with HSV for smooth color ribbon
+      // 1) Build global list of pixels with HSV for smooth spectrum
       const pixels = new Array(numPixels);
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
@@ -314,91 +311,105 @@
       const m = Math.max(1, Math.min(6, moundCount));
       const centers = [];
       for (let i = 0; i < m; i++) {
-        const centerX = Math.round(((i + 0.5) * width) / m);
+        const centerX = Math.round(((i + 0.5) * width) / m) - 1;
         centers.push(Math.max(0, Math.min(width - 1, centerX)));
       }
 
-      // 4) Column heights and output buffer
-      const heights = new Array(width).fill(0);
-      const newData = new Uint8ClampedArray(data.length);
+      // Jitter range around each center so piles have some width
+      const jitterRange = Math.max(1, Math.floor(width / (m * 10)));
+
+      // 4) Output buffer and occupancy check
+      const newData = new Uint8ClampedArray(data.length); // all zeros => alpha 0 => empty
+
+      function isEmpty(x, y) {
+        if (x < 0 || x >= width || y < 0 || y >= height) return false;
+        const offset = (y * width + x) * 4;
+        return newData[offset + 3] === 0; // alpha 0 => empty
+      }
 
       function setPixel(x, y, pixel) {
         const offset = (y * width + x) * 4;
         newData[offset]     = pixel.r;
         newData[offset + 1] = pixel.g;
         newData[offset + 2] = pixel.b;
-        newData[offset + 3] = pixel.a;
+        newData[offset + 3] = pixel.a; // keep original alpha
       }
 
-      // Drop one grain into a local minimum around a mound center
+      // 5) Falling sand: gravity + diagonal slide
       function dropGrain(pixel) {
+        // Choose mound center and starting x with jitter
         const centerIndex = Math.floor(Math.random() * m);
-        const centerX = centers[centerIndex];
+        const baseX = centers[centerIndex];
+        let x = baseX + randomInt(-jitterRange, jitterRange);
+        if (x < 0) x = 0;
+        if (x >= width) x = width - 1;
 
-        // Local neighborhood radius: tuned for nice shapes
-        const baseRadius = Math.max(2, Math.floor(width / (m * 12)));
-        const radius = baseRadius;
+        let y = 0;
 
-        let bestHeight = Infinity;
-        let bestColumns = [];
+        // Safety iteration cap to avoid rare infinite loops
+        let steps = 0;
+        const maxSteps = height * 3;
 
-        const start = Math.max(0, centerX - radius);
-        const end   = Math.min(width - 1, centerX + radius);
+        while (steps < maxSteps) {
+          steps++;
 
-        for (let x = start; x <= end; x++) {
-          const h = heights[x];
-          if (h < bestHeight) {
-            bestHeight = h;
-            bestColumns = [x];
-          } else if (h === bestHeight) {
-            bestColumns.push(x);
-          }
-        }
-
-        // Fallback: full scan if something goes weird
-        if (bestColumns.length === 0) {
-          bestHeight = Infinity;
-          for (let x = 0; x < width; x++) {
-            const h = heights[x];
-            if (h < bestHeight) {
-              bestHeight = h;
-              bestColumns = [x];
-            } else if (h === bestHeight) {
-              bestColumns.push(x);
+          // If we're at the bottom row, settle here if free
+          if (y === height - 1) {
+            if (isEmpty(x, y)) {
+              setPixel(x, y, pixel);
             }
+            break;
           }
-        }
 
-        if (bestColumns.length === 0) return; // no space (shouldn't happen)
+          // If cell directly below is free, fall straight down
+          if (isEmpty(x, y + 1)) {
+            y++;
+            continue;
+          }
 
-        const chosenX = bestColumns[Math.floor(Math.random() * bestColumns.length)];
-        let columnHeight = heights[chosenX];
+          // Below is blocked; try to slide diagonally down-left or down-right
+          const canLeft  = x > 0 && isEmpty(x - 1, y + 1);
+          const canRight = x < width - 1 && isEmpty(x + 1, y + 1);
 
-        if (columnHeight >= height) {
-          // Absolute safety net: find any column with space
-          let fallbackX = -1;
-          for (let x = 0; x < width; x++) {
-            if (heights[x] < height) {
-              fallbackX = x;
-              columnHeight = heights[x];
-              break;
+          if (!canLeft && !canRight) {
+            // No place to go, settle here if free
+            if (isEmpty(x, y)) {
+              setPixel(x, y, pixel);
             }
+            break;
           }
-          if (fallbackX === -1) return;
-          const yFallback = height - 1 - columnHeight;
-          setPixel(fallbackX, yFallback, pixel);
-          heights[fallbackX] = columnHeight + 1;
-          return;
-        }
 
-        const y = height - 1 - columnHeight;
-        setPixel(chosenX, y, pixel);
-        heights[chosenX] = columnHeight + 1;
+          if (canLeft && canRight) {
+            // Randomly choose left or right
+            if (Math.random() < 0.5) {
+              x--;
+            } else {
+              x++;
+            }
+            y++;
+          } else if (canLeft) {
+            x--;
+            y++;
+          } else {
+            x++;
+            y++;
+          }
+        }
       }
 
-      // 5) Drop all pixels in ribbon order
+      // 6) Drop all pixels in smooth color ribbon order
       for (let i = 0; i < pixels.length; i++) {
         dropGrain(pixels[i]);
+      }
+
+      // Fill any leftover fully empty pixels with opaque black to avoid transparency gaps
+      for (let i = 0; i < newData.length; i += 4) {
+        if (newData[i + 3] === 0) {
+          newData[i] = 0;
+          newData[i + 1] = 0;
+          newData[i + 2] = 0;
+          newData[i + 3] = 255;
+        }
       }
 
       return new ImageData(newData, width, height);
