@@ -102,12 +102,23 @@
       font-size: 0.8rem;
       opacity: 0.6;
       margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 1000px;
+    }
+
+    .version {
+      font-size: 0.8rem;
+      opacity: 0.7;
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <h1>Pixel Shuffler (MVP)</h1>
+    <h1>Pixel Shuffler</h1>
 
     <div class="controls">
       <label>
@@ -120,7 +131,8 @@
         <select id="modeSelect">
           <option value="random">Random Shuffle</option>
           <option value="brightness">Sort by Brightness</option>
-          <option value="hue">Sort by Hue</option> <!-- NEW -->
+          <option value="hue">Sort by Hue</option>
+          <option value="hueLayers">Hue Layers (Sand)</option> <!-- NEW -->
         </select>
       </label>
 
@@ -140,13 +152,19 @@
         <canvas id="outputCanvas"></canvas>
       </div>
     </div>
+  </div>
 
-    <div class="footer">
-      MVP: upload an image, choose a mode, then click "Apply".
-    </div>
+  <div class="footer">
+    <span>Upload an image, pick a mode, then click "Apply".</span>
+    <span class="version">Version: <span id="versionText"></span></span>
   </div>
 
   <script>
+    // ---- Version ---------------------------------------------------------
+    const APP_VERSION = '0.3.0';
+    document.getElementById('versionText').textContent = APP_VERSION;
+
+    // ---- DOM elements ----------------------------------------------------
     const fileInput = document.getElementById('fileInput');
     const modeSelect = document.getElementById('modeSelect');
     const applyBtn = document.getElementById('applyBtn');
@@ -317,7 +335,6 @@
       return new ImageData(newData, width, height);
     }
 
-    // NEW: sort by hue (using HSV hue)
     function transformSortByHue(imageData) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
@@ -339,7 +356,7 @@
         };
       }
 
-      // Sort by hue, then by saturation, then value (for more structure)
+      // Sort by hue, then by saturation, then value
       pixels.sort((p1, p2) => {
         if (p1.h !== p2.h) return p1.h - p2.h;
         if (p1.s !== p2.s) return p1.s - p2.s;
@@ -354,6 +371,66 @@
         newData[offset + 1] = g;
         newData[offset + 2] = b;
         newData[offset + 3] = a;
+      }
+
+      return new ImageData(newData, width, height);
+    }
+
+    // NEW: Hue Layers (Sand)
+    function transformHueLayers(imageData) {
+      const { data, width, height } = imageData;
+      const numPixels = width * height;
+
+      const numBuckets = 12; // number of hue bands
+      const buckets = Array.from({ length: numBuckets }, () => []);
+
+      // Bucket pixels by hue
+      for (let i = 0; i < numPixels; i++) {
+        const offset = i * 4;
+        const r = data[offset];
+        const g = data[offset + 1];
+        const b = data[offset + 2];
+        const a = data[offset + 3];
+
+        const { h } = rgbToHsv(r, g, b);
+        let bucketIndex = Math.floor((h / 360) * numBuckets);
+        if (isNaN(bucketIndex) || bucketIndex < 0) bucketIndex = 0;
+        if (bucketIndex >= numBuckets) bucketIndex = numBuckets - 1;
+
+        // Store pixel as small array to be lightweight
+        buckets[bucketIndex].push([r, g, b, a]);
+      }
+
+      // Shuffle inside each bucket so layers look more like "sand"
+      for (let b = 0; b < numBuckets; b++) {
+        shuffleArray(buckets[b]);
+      }
+
+      // Fill the image row by row, bucket by bucket
+      const newData = new Uint8ClampedArray(data.length);
+      let p = 0; // pixel index
+
+      for (let b = 0; b < numBuckets; b++) {
+        const bucket = buckets[b];
+        for (let i = 0; i < bucket.length; i++) {
+          const [r, g, bCh, a] = bucket[i];
+          const offset = p * 4;
+          newData[offset] = r;
+          newData[offset + 1] = g;
+          newData[offset + 2] = bCh;
+          newData[offset + 3] = a;
+          p++;
+        }
+      }
+
+      // If for some reason we didn't fill all pixels (shouldn't happen, but safety):
+      while (p < numPixels) {
+        const offset = p * 4;
+        newData[offset] = 0;
+        newData[offset + 1] = 0;
+        newData[offset + 2] = 0;
+        newData[offset + 3] = 255;
+        p++;
       }
 
       return new ImageData(newData, width, height);
@@ -389,6 +466,8 @@
             result = transformSortByBrightness(imageData);
           } else if (mode === 'hue') {
             result = transformSortByHue(imageData);
+          } else if (mode === 'hueLayers') {
+            result = transformHueLayers(imageData);
           } else {
             setStatus('Unknown mode.');
             applyBtn.disabled = false;
