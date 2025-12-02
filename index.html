@@ -19,6 +19,14 @@
     h1 {
       margin: 0;
       font-size: 1.6rem;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .version-inline {
+      font-size: 0.85rem;
+      opacity: 0.7;
     }
 
     .app {
@@ -42,6 +50,9 @@
     .controls label {
       font-size: 0.9rem;
       opacity: 0.9;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     input[type="file"] {
@@ -110,7 +121,7 @@
       max-width: 1000px;
     }
 
-    .version {
+    .version-footer {
       font-size: 0.8rem;
       opacity: 0.7;
     }
@@ -118,7 +129,10 @@
 </head>
 <body>
   <div class="app">
-    <h1>Pixel Shuffler</h1>
+    <h1>
+      Pixel Shuffler
+      <span class="version-inline js-version"></span>
+    </h1>
 
     <div class="controls">
       <label>
@@ -127,16 +141,18 @@
       </label>
 
       <label>
-        Mode:
-        <select id="modeSelect">
-          <option value="random">Random Shuffle</option>
-          <option value="brightness">Sort by Brightness</option>
-          <option value="hue">Sort by Hue</option>
-          <option value="hueSand">Hue Sand (Gravity)</option> <!-- updated name -->
+        Sand Layers (mounds):
+        <select id="moundsSelect">
+          <option value="1">1 mound</option>
+          <option value="2" selected>2 mounds</option>
+          <option value="3">3 mounds</option>
+          <option value="4">4 mounds</option>
+          <option value="5">5 mounds</option>
+          <option value="6">6 mounds</option>
         </select>
       </label>
 
-      <button id="applyBtn" disabled>Apply</button>
+      <button id="applyBtn" disabled>Apply Sand Layers</button>
       <button id="downloadBtn" disabled>Download Result</button>
 
       <span class="status" id="statusText"></span>
@@ -148,25 +164,27 @@
         <canvas id="originalCanvas"></canvas>
       </div>
       <div class="canvas-wrapper">
-        <h2>Transformed</h2>
+        <h2>Sand Layers Output</h2>
         <canvas id="outputCanvas"></canvas>
       </div>
     </div>
   </div>
 
   <div class="footer">
-    <span>Upload an image, pick a mode, then click "Apply".</span>
-    <span class="version">Version: <span id="versionText"></span></span>
+    <span>Upload an image, choose the number of mounds, then click "Apply Sand Layers".</span>
+    <span class="version-footer">Version: <span class="js-version"></span></span>
   </div>
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.4.0';
-    document.getElementById('versionText').textContent = APP_VERSION;
+    const APP_VERSION = '0.5.0';
+    document.querySelectorAll('.js-version').forEach(el => {
+      el.textContent = `· v${APP_VERSION}`;
+    });
 
     // ---- DOM elements ----------------------------------------------------
     const fileInput = document.getElementById('fileInput');
-    const modeSelect = document.getElementById('modeSelect');
+    const moundsSelect = document.getElementById('moundsSelect');
     const applyBtn = document.getElementById('applyBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const statusText = document.getElementById('statusText');
@@ -190,11 +208,6 @@
         const j = Math.floor(Math.random() * (i + 1));
         [array[i], array[j]] = [array[j], array[i]];
       }
-    }
-
-    function getBrightness(r, g, b) {
-      // Standard luma formula
-      return 0.299 * r + 0.587 * g + 0.114 * b;
     }
 
     // RGB -> HSV helper (h: 0–360, s: 0–1, v: 0–1)
@@ -237,8 +250,8 @@
       reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
-          // Optional: resize large images down
-          const maxSide = 1200;
+          // Resize large images down for performance
+          const maxSide = 800;
           let { width, height } = img;
 
           if (width > maxSide || height > maxSide) {
@@ -256,7 +269,7 @@
           outputCtx.clearRect(0, 0, width, height);
 
           originalCtx.drawImage(img, 0, 0, width, height);
-          setStatus('Image loaded. Choose a mode and click Apply.');
+          setStatus('Image loaded. Choose mound count and click "Apply Sand Layers".');
           imageLoaded = true;
           applyBtn.disabled = false;
           downloadBtn.disabled = true;
@@ -272,119 +285,16 @@
       setStatus('Reading image...');
     });
 
-    // ---- Pixel transforms ------------------------------------------------
+    // ---- Sand Layers transform (Hue-based, with mounds & gravity) -------
 
-    function transformRandomShuffle(imageData) {
+    function transformSandLayers(imageData, moundCount) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      const indices = new Uint32Array(numPixels);
-      for (let i = 0; i < numPixels; i++) {
-        indices[i] = i;
-      }
-
-      shuffleArray(indices);
-
-      const newData = new Uint8ClampedArray(data.length);
-
-      for (let i = 0; i < numPixels; i++) {
-        const srcIndex = indices[i];
-        const dstOffset = i * 4;
-        const srcOffset = srcIndex * 4;
-
-        newData[dstOffset] = data[srcOffset];       // R
-        newData[dstOffset + 1] = data[srcOffset+1]; // G
-        newData[dstOffset + 2] = data[srcOffset+2]; // B
-        newData[dstOffset + 3] = data[srcOffset+3]; // A
-      }
-
-      return new ImageData(newData, width, height);
-    }
-
-    function transformSortByBrightness(imageData) {
-      const { data, width, height } = imageData;
-      const numPixels = width * height;
-
-      const pixels = new Array(numPixels);
-
-      for (let i = 0; i < numPixels; i++) {
-        const offset = i * 4;
-        const r = data[offset];
-        const g = data[offset + 1];
-        const b = data[offset + 2];
-        const a = data[offset + 3];
-
-        pixels[i] = {
-          r, g, b, a,
-          brightness: getBrightness(r, g, b)
-        };
-      }
-
-      pixels.sort((p1, p2) => p1.brightness - p2.brightness);
-
-      const newData = new Uint8ClampedArray(data.length);
-      for (let i = 0; i < numPixels; i++) {
-        const { r, g, b, a } = pixels[i];
-        const offset = i * 4;
-        newData[offset] = r;
-        newData[offset + 1] = g;
-        newData[offset + 2] = b;
-        newData[offset + 3] = a;
-      }
-
-      return new ImageData(newData, width, height);
-    }
-
-    function transformSortByHue(imageData) {
-      const { data, width, height } = imageData;
-      const numPixels = width * height;
-
-      const pixels = new Array(numPixels);
-
-      for (let i = 0; i < numPixels; i++) {
-        const offset = i * 4;
-        const r = data[offset];
-        const g = data[offset + 1];
-        const b = data[offset + 2];
-        const a = data[offset + 3];
-
-        const { h, s, v } = rgbToHsv(r, g, b);
-
-        pixels[i] = {
-          r, g, b, a,
-          h, s, v
-        };
-      }
-
-      // Sort by hue, then by saturation, then value
-      pixels.sort((p1, p2) => {
-        if (p1.h !== p2.h) return p1.h - p2.h;
-        if (p1.s !== p2.s) return p1.s - p2.s;
-        return p1.v - p2.v;
-      });
-
-      const newData = new Uint8ClampedArray(data.length);
-      for (let i = 0; i < numPixels; i++) {
-        const { r, g, b, a } = pixels[i];
-        const offset = i * 4;
-        newData[offset] = r;
-        newData[offset + 1] = g;
-        newData[offset + 2] = b;
-        newData[offset + 3] = a;
-      }
-
-      return new ImageData(newData, width, height);
-    }
-
-    // NEW: Hue Sand (Gravity)
-    function transformHueSand(imageData) {
-      const { data, width, height } = imageData;
-      const numPixels = width * height;
-
-      const numBuckets = 12; // number of hue bands
+      const numBuckets = 24; // hue buckets for finer hue organization
       const buckets = Array.from({ length: numBuckets }, () => []);
 
-      // 1) Bucket pixels by hue
+      // 1) Bucket pixels by hue only
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
         const r = data[offset];
@@ -400,66 +310,94 @@
         buckets[bucketIndex].push([r, g, b, a]);
       }
 
-      // 2) Shuffle inside each bucket so layers look more "grainy"
+      // 2) Shuffle inside each bucket for grainy look
       for (let b = 0; b < numBuckets; b++) {
         shuffleArray(buckets[b]);
       }
 
-      // 3) Gravity-based stacking:
-      //    We have a "height" per column (how many pixels already stacked from bottom).
-      const heights = new Array(width).fill(0);
-      const newData = new Uint8ClampedArray(data.length);
-
-      // Fill newData with transparent black just in case
-      for (let i = 0; i < newData.length; i += 4) {
-        newData[i] = 0;
-        newData[i + 1] = 0;
-        newData[i + 2] = 0;
-        newData[i + 3] = 255;
+      // 3) Precompute mound centers (1–6 positions horizontally)
+      const centers = [];
+      const m = Math.max(1, Math.min(6, moundCount));
+      for (let i = 0; i < m; i++) {
+        const centerX = Math.round(((i + 0.5) * width) / m);
+        centers.push(Math.max(0, Math.min(width - 1, centerX)));
       }
 
-      // Helper to find a column that still has space
-      function findColumnWithSpace(startX) {
-        let x = startX;
-        // Try random columns a few times
-        for (let i = 0; i < 10; i++) {
-          x = Math.floor(Math.random() * width);
-          if (heights[x] < height) return x;
-        }
-        // Fallback: linear scan
-        for (let col = 0; col < width; col++) {
-          if (heights[col] < height) return col;
-        }
-        return null; // full (should not really happen until we place all pixels)
+      // 4) Prepare output buffer & occupancy
+      const newData = new Uint8ClampedArray(data.length); // all zeros -> alpha 0 means empty
+
+      function isOccupied(x, y) {
+        const offset = (y * width + x) * 4;
+        return newData[offset + 3] !== 0; // alpha != 0 => occupied
       }
 
-      // We process buckets in hue order so lower hues become lower layers.
+      function setPixel(x, y, pixel) {
+        const offset = (y * width + x) * 4;
+        newData[offset] = pixel[0];
+        newData[offset + 1] = pixel[1];
+        newData[offset + 2] = pixel[2];
+        newData[offset + 3] = pixel[3];
+      }
+
+      // 5) Simulate gravity from top to bottom:
+      //    grains fall from mound centers, can slide down-left/down-right.
+      function dropGrain(pixel) {
+        // choose a mound center to pour from
+        const centerIndex = Math.floor(Math.random() * m);
+        let x = centers[centerIndex];
+        let y = 0;
+
+        // If the very top cell is already blocked and cannot slide anywhere, grain may get discarded
+        for (;;) {
+          // If we're at the bottom row, settle here if free
+          if (y === height - 1) {
+            if (!isOccupied(x, y)) {
+              setPixel(x, y, pixel);
+            }
+            break;
+          }
+
+          // If cell directly below is free, fall straight down
+          if (!isOccupied(x, y + 1)) {
+            y++;
+            continue;
+          }
+
+          // Below is occupied; try to slide diagonally down-left or down-right
+          const canLeft = x > 0 && !isOccupied(x - 1, y + 1);
+          const canRight = x < width - 1 && !isOccupied(x + 1, y + 1);
+
+          if (!canLeft && !canRight) {
+            // No place to go, settle here if free
+            if (!isOccupied(x, y)) {
+              setPixel(x, y, pixel);
+            }
+            break;
+          }
+
+          if (canLeft && canRight) {
+            // Randomly choose left or right
+            if (Math.random() < 0.5) {
+              x--;
+            } else {
+              x++;
+            }
+            y++;
+          } else if (canLeft) {
+            x--;
+            y++;
+          } else {
+            x++;
+            y++;
+          }
+        }
+      }
+
+      // Process buckets in hue order so the layering is hue-organized
       for (let b = 0; b < numBuckets; b++) {
         const bucket = buckets[b];
         for (let i = 0; i < bucket.length; i++) {
-          let x = Math.floor(Math.random() * width);
-          x = findColumnWithSpace(x);
-          if (x === null) {
-            // No space left (safety guard).
-            continue;
-          }
-          const columnHeight = heights[x]; // how many pixels already stacked
-
-          if (columnHeight >= height) {
-            continue;
-          }
-
-          // bottom row has index height - 1
-          const destY = (height - 1) - columnHeight;
-          const offset = (destY * width + x) * 4;
-
-          const [r, g, bCh, a] = bucket[i];
-          newData[offset] = r;
-          newData[offset + 1] = g;
-          newData[offset + 2] = bCh;
-          newData[offset + 3] = a;
-
-          heights[x] = columnHeight + 1;
+          dropGrain(bucket[i]);
         }
       }
 
@@ -474,36 +412,21 @@
         return;
       }
 
-      const mode = modeSelect.value;
+      const moundCount = parseInt(moundsSelect.value, 10) || 2;
 
       const width = originalCanvas.width;
       const height = originalCanvas.height;
 
       const imageData = originalCtx.getImageData(0, 0, width, height);
 
-      setStatus('Processing...');
+      setStatus('Processing Sand Layers...');
       applyBtn.disabled = true;
       downloadBtn.disabled = true;
 
-      // Give the browser a tick to update UI before heavy work
       setTimeout(() => {
         let result;
-
         try {
-          if (mode === 'random') {
-            result = transformRandomShuffle(imageData);
-          } else if (mode === 'brightness') {
-            result = transformSortByBrightness(imageData);
-          } else if (mode === 'hue') {
-            result = transformSortByHue(imageData);
-          } else if (mode === 'hueSand') {
-            result = transformHueSand(imageData);
-          } else {
-            setStatus('Unknown mode.');
-            applyBtn.disabled = false;
-            return;
-          }
-
+          result = transformSandLayers(imageData, moundCount);
           outputCtx.putImageData(result, 0, 0);
           setStatus('Done. You can download the result.');
           downloadBtn.disabled = false;
@@ -520,7 +443,7 @@
 
     downloadBtn.addEventListener('click', () => {
       const link = document.createElement('a');
-      link.download = 'pixel-shuffled.png';
+      link.download = 'pixel-sand-layers.png';
       link.href = outputCanvas.toDataURL('image/png');
       link.click();
     });
