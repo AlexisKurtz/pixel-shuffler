@@ -1,3 +1,19 @@
+<!--
+Pixel Shuffler - Sand Layers
+Version: 0.7.1
+
+Changelog:
+- 0.7.1
+  - Adjusted color sorting so darker pixels (near black) are dropped first
+    and brighter pixels (near white) are dropped last, creating a bottom-to-top
+    gradient from dark to light in the sand mounds.
+  - Sorting now uses HSV with primary ordering by value/brightness (V),
+    then hue (H), then saturation (S) for smoother, progressive color changes.
+- 0.7.0
+  - Added Sand Layers mode with falling-sand style mounds and a global HSV
+    "color ribbon".
+-->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -177,16 +193,16 @@
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.7.0';
+    const APP_VERSION = '0.7.1';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
     document.querySelector('.js-version-footer').textContent = `v${APP_VERSION}`;
 
     // ---- DOM elements ----------------------------------------------------
-    const fileInput   = document.getElementById('fileInput');
+    const fileInput    = document.getElementById('fileInput');
     const moundsSelect = document.getElementById('moundsSelect');
-    const applyBtn    = document.getElementById('applyBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const statusText  = document.getElementById('statusText');
+    const applyBtn     = document.getElementById('applyBtn');
+    const downloadBtn  = document.getElementById('downloadBtn');
+    const statusText   = document.getElementById('statusText');
 
     const originalCanvas = document.getElementById('originalCanvas');
     const outputCanvas   = document.getElementById('outputCanvas');
@@ -281,13 +297,13 @@
       setStatus('Reading image...');
     });
 
-    // ---- Sand Layers transform (global HSV + falling-sand mounds) -------
+    // ---- Sand Layers transform (dark-bottom / light-top + falling sand) ---
 
     function transformSandLayers(imageData, moundCount) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      // 1) Build global list of pixels with HSV for smooth spectrum
+      // 1) Build global list of pixels with HSV
       const pixels = new Array(numPixels);
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
@@ -300,11 +316,12 @@
         pixels[i] = { r, g, b, a, h, s, v };
       }
 
-      // 2) Sort globally by hue, then saturation, then value
+      // 2) Sort primarily by brightness (v), then hue (h), then saturation (s)
+      //    => dark (near black) first, bright (near white) last
       pixels.sort((p1, p2) => {
-        if (p1.h !== p2.h) return p1.h - p2.h;
-        if (p1.s !== p2.s) return p1.s - p2.s;
-        return p1.v - p2.v;
+        if (p1.v !== p2.v) return p1.v - p2.v;    // dark -> light
+        if (p1.h !== p2.h) return p1.h - p2.h;    // within same brightness, smooth hue progression
+        return p1.s - p2.s;                       // then by saturation
       });
 
       // 3) Precompute mound centers (1–6 positions horizontally)
@@ -335,7 +352,7 @@
         newData[offset + 3] = pixel.a; // keep original alpha
       }
 
-      // 5) Falling sand: gravity + diagonal slide
+      // 5) Falling sand: gravity + diagonal slide => roughly triangular mounds
       function dropGrain(pixel) {
         // Choose mound center and starting x with jitter
         const centerIndex = Math.floor(Math.random() * m);
@@ -397,7 +414,7 @@
         }
       }
 
-      // 6) Drop all pixels in smooth color ribbon order
+      // 6) Drop all pixels in dark->light ribbon order
       for (let i = 0; i < pixels.length; i++) {
         dropGrain(pixels[i]);
       }
