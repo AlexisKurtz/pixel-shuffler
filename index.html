@@ -131,7 +131,7 @@
   <div class="app">
     <h1>
       Pixel Shuffler
-      <span class="version-inline js-version"></span>
+      <span class="version-inline js-version-inline"></span>
     </h1>
 
     <div class="controls">
@@ -172,15 +172,14 @@
 
   <div class="footer">
     <span>Upload an image, choose the number of mounds, then click "Apply Sand Layers".</span>
-    <span class="version-footer">Version: <span class="js-version"></span></span>
+    <span class="version-footer">Version: <span class="js-version-footer"></span></span>
   </div>
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.5.0';
-    document.querySelectorAll('.js-version').forEach(el => {
-      el.textContent = `· v${APP_VERSION}`;
-    });
+    const APP_VERSION = '0.6.0';
+    document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
+    document.querySelector('.js-version-footer').textContent = `v${APP_VERSION}`;
 
     // ---- DOM elements ----------------------------------------------------
     const fileInput = document.getElementById('fileInput');
@@ -285,120 +284,121 @@
       setStatus('Reading image...');
     });
 
-    // ---- Sand Layers transform (Hue-based, with mounds & gravity) -------
+    // ---- Sand Layers transform (global HSV + mounds & gravity-like piling) ----
 
     function transformSandLayers(imageData, moundCount) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      const numBuckets = 24; // hue buckets for finer hue organization
-      const buckets = Array.from({ length: numBuckets }, () => []);
-
-      // 1) Bucket pixels by hue only
+      // 1) Build a global list of pixels with HSV for smooth color ribbon
+      const pixels = new Array(numPixels);
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
         const r = data[offset];
         const g = data[offset + 1];
         const b = data[offset + 2];
         const a = data[offset + 3];
+        const { h, s, v } = rgbToHsv(r, g, b);
 
-        const { h } = rgbToHsv(r, g, b);
-        let bucketIndex = Math.floor((h / 360) * numBuckets);
-        if (isNaN(bucketIndex) || bucketIndex < 0) bucketIndex = 0;
-        if (bucketIndex >= numBuckets) bucketIndex = numBuckets - 1;
-
-        buckets[bucketIndex].push([r, g, b, a]);
+        pixels[i] = { r, g, b, a, h, s, v };
       }
 
-      // 2) Shuffle inside each bucket for grainy look
-      for (let b = 0; b < numBuckets; b++) {
-        shuffleArray(buckets[b]);
-      }
+      // 2) Sort globally by hue, then saturation, then value
+      pixels.sort((p1, p2) => {
+        if (p1.h !== p2.h) return p1.h - p2.h;
+        if (p1.s !== p2.s) return p1.s - p2.s;
+        return p1.v - p2.v;
+      });
 
       // 3) Precompute mound centers (1–6 positions horizontally)
-      const centers = [];
       const m = Math.max(1, Math.min(6, moundCount));
+      const centers = [];
       for (let i = 0; i < m; i++) {
         const centerX = Math.round(((i + 0.5) * width) / m);
         centers.push(Math.max(0, Math.min(width - 1, centerX)));
       }
 
-      // 4) Prepare output buffer & occupancy
-      const newData = new Uint8ClampedArray(data.length); // all zeros -> alpha 0 means empty
-
-      function isOccupied(x, y) {
-        const offset = (y * width + x) * 4;
-        return newData[offset + 3] !== 0; // alpha != 0 => occupied
-      }
+      // 4) Column heights and output buffer
+      const heights = new Array(width).fill(0);
+      const newData = new Uint8ClampedArray(data.length);
 
       function setPixel(x, y, pixel) {
         const offset = (y * width + x) * 4;
-        newData[offset] = pixel[0];
-        newData[offset + 1] = pixel[1];
-        newData[offset + 2] = pixel[2];
-        newData[offset + 3] = pixel[3];
+        newData[offset]     = pixel.r;
+        newData[offset + 1] = pixel.g;
+        newData[offset + 2] = pixel.b;
+        newData[offset + 3] = pixel.a;
       }
 
-      // 5) Simulate gravity from top to bottom:
-      //    grains fall from mound centers, can slide down-left/down-right.
+      // Drop one grain into a local minimum around a mound center
       function dropGrain(pixel) {
-        // choose a mound center to pour from
         const centerIndex = Math.floor(Math.random() * m);
-        let x = centers[centerIndex];
-        let y = 0;
+        const centerX = centers[centerIndex];
 
-        // If the very top cell is already blocked and cannot slide anywhere, grain may get discarded
-        for (;;) {
-          // If we're at the bottom row, settle here if free
-          if (y === height - 1) {
-            if (!isOccupied(x, y)) {
-              setPixel(x, y, pixel);
-            }
-            break;
-          }
+        // Local neighborhood radius: tuned for nice shapes
+        const baseRadius = Math.max(2, Math.floor(width / (m * 12)));
+        const radius = baseRadius;
 
-          // If cell directly below is free, fall straight down
-          if (!isOccupied(x, y + 1)) {
-            y++;
-            continue;
-          }
+        let bestHeight = Infinity;
+        let bestColumns = [];
 
-          // Below is occupied; try to slide diagonally down-left or down-right
-          const canLeft = x > 0 && !isOccupied(x - 1, y + 1);
-          const canRight = x < width - 1 && !isOccupied(x + 1, y + 1);
+        const start = Math.max(0, centerX - radius);
+        const end   = Math.min(width - 1, centerX + radius);
 
-          if (!canLeft && !canRight) {
-            // No place to go, settle here if free
-            if (!isOccupied(x, y)) {
-              setPixel(x, y, pixel);
-            }
-            break;
-          }
-
-          if (canLeft && canRight) {
-            // Randomly choose left or right
-            if (Math.random() < 0.5) {
-              x--;
-            } else {
-              x++;
-            }
-            y++;
-          } else if (canLeft) {
-            x--;
-            y++;
-          } else {
-            x++;
-            y++;
+        for (let x = start; x <= end; x++) {
+          const h = heights[x];
+          if (h < bestHeight) {
+            bestHeight = h;
+            bestColumns = [x];
+          } else if (h === bestHeight) {
+            bestColumns.push(x);
           }
         }
+
+        // Fallback: full scan if something goes weird
+        if (bestColumns.length === 0) {
+          bestHeight = Infinity;
+          for (let x = 0; x < width; x++) {
+            const h = heights[x];
+            if (h < bestHeight) {
+              bestHeight = h;
+              bestColumns = [x];
+            } else if (h === bestHeight) {
+              bestColumns.push(x);
+            }
+          }
+        }
+
+        if (bestColumns.length === 0) return; // no space (shouldn't happen)
+
+        const chosenX = bestColumns[Math.floor(Math.random() * bestColumns.length)];
+        let columnHeight = heights[chosenX];
+
+        if (columnHeight >= height) {
+          // Absolute safety net: find any column with space
+          let fallbackX = -1;
+          for (let x = 0; x < width; x++) {
+            if (heights[x] < height) {
+              fallbackX = x;
+              columnHeight = heights[x];
+              break;
+            }
+          }
+          if (fallbackX === -1) return;
+          const yFallback = height - 1 - columnHeight;
+          setPixel(fallbackX, yFallback, pixel);
+          heights[fallbackX] = columnHeight + 1;
+          return;
+        }
+
+        const y = height - 1 - columnHeight;
+        setPixel(chosenX, y, pixel);
+        heights[chosenX] = columnHeight + 1;
       }
 
-      // Process buckets in hue order so the layering is hue-organized
-      for (let b = 0; b < numBuckets; b++) {
-        const bucket = buckets[b];
-        for (let i = 0; i < bucket.length; i++) {
-          dropGrain(bucket[i]);
-        }
+      // 5) Drop all pixels in ribbon order
+      for (let i = 0; i < pixels.length; i++) {
+        dropGrain(pixels[i]);
       }
 
       return new ImageData(newData, width, height);
@@ -416,7 +416,6 @@
 
       const width = originalCanvas.width;
       const height = originalCanvas.height;
-
       const imageData = originalCtx.getImageData(0, 0, width, height);
 
       setStatus('Processing Sand Layers...');
@@ -424,9 +423,8 @@
       downloadBtn.disabled = true;
 
       setTimeout(() => {
-        let result;
         try {
-          result = transformSandLayers(imageData, moundCount);
+          const result = transformSandLayers(imageData, moundCount);
           outputCtx.putImageData(result, 0, 0);
           setStatus('Done. You can download the result.');
           downloadBtn.disabled = false;
