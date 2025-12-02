@@ -1,8 +1,11 @@
 <!--
 Pixel Shuffler - Sand Layers
-Version: 0.7.1
+Version: 0.7.2
 
 Changelog:
+- 0.7.2
+  - Added horizontal jitter selector (None, Low, Medium, High) to control how far
+    sand grains can start from each mound center, affecting mound width and shape.
 - 0.7.1
   - Adjusted color sorting so darker pixels (near black) are dropped first
     and brighter pixels (near white) are dropped last, creating a bottom-to-top
@@ -168,6 +171,16 @@ Changelog:
         </select>
       </label>
 
+      <label>
+        Horizontal jitter:
+        <select id="jitterSelect">
+          <option value="0">None</option>
+          <option value="0.5">Low</option>
+          <option value="1" selected>Medium</option>
+          <option value="2">High</option>
+        </select>
+      </label>
+
       <button id="applyBtn" disabled>Apply Sand Layers</button>
       <button id="downloadBtn" disabled>Download Result</button>
 
@@ -187,22 +200,23 @@ Changelog:
   </div>
 
   <div class="footer">
-    <span>Upload an image, choose the number of mounds, then click "Apply Sand Layers".</span>
+    <span>Upload an image, choose mound & jitter, then click "Apply Sand Layers".</span>
     <span class="version-footer">Version: <span class="js-version-footer"></span></span>
   </div>
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.7.1';
+    const APP_VERSION = '0.7.2';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
     document.querySelector('.js-version-footer').textContent = `v${APP_VERSION}`;
 
     // ---- DOM elements ----------------------------------------------------
-    const fileInput    = document.getElementById('fileInput');
-    const moundsSelect = document.getElementById('moundsSelect');
-    const applyBtn     = document.getElementById('applyBtn');
-    const downloadBtn  = document.getElementById('downloadBtn');
-    const statusText   = document.getElementById('statusText');
+    const fileInput     = document.getElementById('fileInput');
+    const moundsSelect  = document.getElementById('moundsSelect');
+    const jitterSelect  = document.getElementById('jitterSelect');
+    const applyBtn      = document.getElementById('applyBtn');
+    const downloadBtn   = document.getElementById('downloadBtn');
+    const statusText    = document.getElementById('statusText');
 
     const originalCanvas = document.getElementById('originalCanvas');
     const outputCanvas   = document.getElementById('outputCanvas');
@@ -281,7 +295,7 @@ Changelog:
           outputCtx.clearRect(0, 0, width, height);
 
           originalCtx.drawImage(img, 0, 0, width, height);
-          setStatus('Image loaded. Choose mound count and click "Apply Sand Layers".');
+          setStatus('Image loaded. Choose mound & jitter, then click "Apply Sand Layers".');
           imageLoaded = true;
           applyBtn.disabled = false;
           downloadBtn.disabled = true;
@@ -297,9 +311,9 @@ Changelog:
       setStatus('Reading image...');
     });
 
-    // ---- Sand Layers transform (dark-bottom / light-top + falling sand) ---
+    // ---- Sand Layers transform (dark-bottom / light-top + jitter) -------
 
-    function transformSandLayers(imageData, moundCount) {
+    function transformSandLayers(imageData, moundCount, jitterFactor) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
@@ -332,8 +346,10 @@ Changelog:
         centers.push(Math.max(0, Math.min(width - 1, centerX)));
       }
 
-      // Jitter range around each center so piles have some width
-      const jitterRange = Math.max(1, Math.floor(width / (m * 10)));
+      // Base jitter range: depends on image width and mound count
+      const baseJitter = width / (m * 10);
+      let jitterRange = Math.floor(baseJitter * jitterFactor);
+      if (jitterRange < 0) jitterRange = 0;
 
       // 4) Output buffer and occupancy check
       const newData = new Uint8ClampedArray(data.length); // all zeros => alpha 0 => empty
@@ -357,7 +373,11 @@ Changelog:
         // Choose mound center and starting x with jitter
         const centerIndex = Math.floor(Math.random() * m);
         const baseX = centers[centerIndex];
-        let x = baseX + randomInt(-jitterRange, jitterRange);
+
+        let x = baseX;
+        if (jitterRange > 0) {
+          x = baseX + randomInt(-jitterRange, jitterRange);
+        }
         if (x < 0) x = 0;
         if (x >= width) x = width - 1;
 
@@ -440,7 +460,8 @@ Changelog:
         return;
       }
 
-      const moundCount = parseInt(moundsSelect.value, 10) || 2;
+      const moundCount   = parseInt(moundsSelect.value, 10) || 2;
+      const jitterFactor = parseFloat(jitterSelect.value) || 0;
 
       const width = originalCanvas.width;
       const height = originalCanvas.height;
@@ -452,7 +473,7 @@ Changelog:
 
       setTimeout(() => {
         try {
-          const result = transformSandLayers(imageData, moundCount);
+          const result = transformSandLayers(imageData, moundCount, jitterFactor);
           outputCtx.putImageData(result, 0, 0);
           setStatus('Done. You can download the result.');
           downloadBtn.disabled = false;
