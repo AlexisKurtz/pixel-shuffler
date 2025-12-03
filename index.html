@@ -1,20 +1,22 @@
 <!--
 Pixel Shuffler - Sand Layers
-Version: 0.7.2
+Version: 0.8.0
 
 Changelog:
+- 0.8.0
+  - Switched from falling-sand particle simulation to a contour-based "sand mound"
+    renderer:
+      * Mounds are generated as smooth bell-shaped curves (heightfield).
+      * Colors come from the input image: pixels are converted to HSV and sorted
+        by brightness (V), then hue (H), then saturation (S) to form a gradient.
+      * Each mound is sliced into horizontal bands; band index is mapped to the
+        gradient to create smooth layered sand, similar to stylized sand-art hills.
 - 0.7.2
-  - Added horizontal jitter selector (None, Low, Medium, High) to control how far
-    sand grains can start from each mound center, affecting mound width and shape.
+  - Added horizontal jitter selector for falling-sand physics (now removed).
 - 0.7.1
-  - Adjusted color sorting so darker pixels (near black) are dropped first
-    and brighter pixels (near white) are dropped last, creating a bottom-to-top
-    gradient from dark to light in the sand mounds.
-  - Sorting now uses HSV with primary ordering by value/brightness (V),
-    then hue (H), then saturation (S) for smoother, progressive color changes.
+  - Dark-to-light sorting using HSV (V -> H -> S) for sand particle drop order.
 - 0.7.0
-  - Added Sand Layers mode with falling-sand style mounds and a global HSV
-    "color ribbon".
+  - Initial Sand Layers mode with falling-sand behavior and global HSV ordering.
 -->
 
 <!DOCTYPE html>
@@ -25,8 +27,8 @@ Changelog:
   <style>
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #111;
-      color: #f5f5f5;
+      background: #f2e4c9; /* warm paper background like sand art */
+      color: #222;
       margin: 0;
       padding: 20px;
       display: flex;
@@ -61,9 +63,10 @@ Changelog:
       flex-wrap: wrap;
       gap: 10px;
       align-items: center;
-      background: #1b1b1b;
+      background: #f7f0dc;
       padding: 10px 12px;
       border-radius: 8px;
+      border: 1px solid #e0d4b8;
     }
 
     .controls label {
@@ -79,9 +82,9 @@ Changelog:
     }
 
     select, button {
-      background: #222;
-      color: #f5f5f5;
-      border: 1px solid #444;
+      background: #fffaf0;
+      color: #222;
+      border: 1px solid #c9bca0;
       border-radius: 6px;
       padding: 6px 10px;
       font-size: 0.9rem;
@@ -89,7 +92,7 @@ Changelog:
     }
 
     button:hover {
-      background: #333;
+      background: #f0e4c5;
     }
 
     button:disabled {
@@ -105,9 +108,10 @@ Changelog:
     }
 
     .canvas-wrapper {
-      background: #1b1b1b;
+      background: #f7f0dc;
       border-radius: 8px;
       padding: 10px;
+      border: 1px solid #e0d4b8;
     }
 
     .canvas-wrapper h2 {
@@ -119,7 +123,8 @@ Changelog:
     canvas {
       max-width: 100%;
       border-radius: 4px;
-      background: #000;
+      background: transparent;
+      display: block;
     }
 
     .status {
@@ -130,7 +135,7 @@ Changelog:
 
     .footer {
       font-size: 0.8rem;
-      opacity: 0.6;
+      opacity: 0.7;
       margin-top: 10px;
       display: flex;
       gap: 8px;
@@ -138,11 +143,7 @@ Changelog:
       justify-content: space-between;
       width: 100%;
       max-width: 1000px;
-    }
-
-    .version-footer {
-      font-size: 0.8rem;
-      opacity: 0.7;
+      color: #444;
     }
   </style>
 </head>
@@ -160,24 +161,24 @@ Changelog:
       </label>
 
       <label>
-        Sand Layers (mounds):
+        Mounds:
         <select id="moundsSelect">
-          <option value="1">1 mound</option>
-          <option value="2" selected>2 mounds</option>
-          <option value="3">3 mounds</option>
-          <option value="4">4 mounds</option>
-          <option value="5">5 mounds</option>
-          <option value="6">6 mounds</option>
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
         </select>
       </label>
 
       <label>
-        Horizontal jitter:
-        <select id="jitterSelect">
-          <option value="0">None</option>
-          <option value="0.5">Low</option>
-          <option value="1" selected>Medium</option>
-          <option value="2">High</option>
+        Bands:
+        <select id="bandsSelect">
+          <option value="20">20</option>
+          <option value="30" selected>30</option>
+          <option value="40">40</option>
+          <option value="60">60</option>
         </select>
       </label>
 
@@ -200,20 +201,20 @@ Changelog:
   </div>
 
   <div class="footer">
-    <span>Upload an image, choose mound & jitter, then click "Apply Sand Layers".</span>
-    <span class="version-footer">Version: <span class="js-version-footer"></span></span>
+    <span>Upload an image, choose mound count & bands, then click "Apply Sand Layers".</span>
+    <span>Version: <span class="js-version-footer"></span></span>
   </div>
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.7.2';
+    const APP_VERSION = '0.8.0';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
-    document.querySelector('.js-version-footer').textContent = `v${APP_VERSION}`;
+    document.querySelector('.js-version-footer').textContent = APP_VERSION;
 
     // ---- DOM elements ----------------------------------------------------
     const fileInput     = document.getElementById('fileInput');
     const moundsSelect  = document.getElementById('moundsSelect');
-    const jitterSelect  = document.getElementById('jitterSelect');
+    const bandsSelect   = document.getElementById('bandsSelect');
     const applyBtn      = document.getElementById('applyBtn');
     const downloadBtn   = document.getElementById('downloadBtn');
     const statusText    = document.getElementById('statusText');
@@ -224,6 +225,7 @@ Changelog:
     const outputCtx      = outputCanvas.getContext('2d');
 
     let imageLoaded = false;
+    let lastImageData = null;
 
     // ---- Helpers ---------------------------------------------------------
 
@@ -239,7 +241,7 @@ Changelog:
 
       const max = Math.max(r, g, b);
       const min = Math.min(r, g, b);
-      const d = max - min;
+      const d   = max - min;
 
       let h = 0;
       const v = max;
@@ -260,9 +262,139 @@ Changelog:
       return { h, s, v };
     }
 
-    function randomInt(min, max) {
-      // inclusive of both ends
-      return Math.floor(Math.random() * (max - min + 1)) + min;
+    // Build a gradient (array of colors) from the image's pixels
+    function buildGradientFromImage(imageData, numBands) {
+      const { data, width, height } = imageData;
+      const numPixels = width * height;
+      const pixels = [];
+
+      for (let i = 0; i < numPixels; i++) {
+        const offset = i * 4;
+        const r = data[offset];
+        const g = data[offset + 1];
+        const b = data[offset + 2];
+        const a = data[offset + 3];
+
+        const { h, s, v } = rgbToHsv(r, g, b);
+        pixels.push({ r, g, b, a, h, s, v });
+      }
+
+      // Sort mainly by brightness (dark -> light), then by hue, then saturation
+      pixels.sort((p1, p2) => {
+        if (p1.v !== p2.v) return p1.v - p2.v;
+        if (p1.h !== p2.h) return p1.h - p2.h;
+        return p1.s - p2.s;
+      });
+
+      const gradient = [];
+      if (pixels.length === 0) {
+        // fallback: grayscale gradient
+        for (let i = 0; i < numBands; i++) {
+          const v = Math.round((i / (numBands - 1)) * 255);
+          gradient.push({ r: v, g: v, b: v, a: 255 });
+        }
+        return gradient;
+      }
+
+      // Sample evenly along the sorted list
+      for (let i = 0; i < numBands; i++) {
+        const t = i / (numBands - 1);
+        const index = Math.floor(t * (pixels.length - 1));
+        const p = pixels[index];
+        gradient.push({ r: p.r, g: p.g, b: p.b, a: 255 });
+      }
+
+      return gradient;
+    }
+
+    // Generate mounds as a heightfield (smooth hills)
+    function generateMoundHeights(width, height, moundCount) {
+      const m = Math.max(1, Math.min(6, moundCount));
+      const centers = [];
+      const amplitudes = [];
+      const sigmas = [];
+
+      // Spread centers evenly
+      for (let i = 0; i < m; i++) {
+        const centerX = (i + 0.5) * (width / m);
+        centers.push(centerX);
+      }
+
+      // Heights & widths of mounds
+      const maxAmplitude = height * 0.6; // max mound height
+      for (let i = 0; i < m; i++) {
+        // small random variation so mounds aren't identical
+        const amp = maxAmplitude * (0.8 + Math.random() * 0.4);
+        amplitudes.push(amp);
+        const sigma = width / (m * 2.2);
+        sigmas.push(sigma);
+      }
+
+      const heights = new Float32Array(width);
+
+      for (let x = 0; x < width; x++) {
+        let h = 0;
+        for (let i = 0; i < m; i++) {
+          const dx = x - centers[i];
+          const s = sigmas[i];
+          const gauss = amplitudes[i] * Math.exp(-0.5 * (dx * dx) / (s * s));
+          if (gauss > h) h = gauss; // use max for nice overlapping peaks
+        }
+        heights[x] = h;
+      }
+
+      return heights;
+    }
+
+    // Main render: contour-based sand layers
+    function renderSandLayers(imageData, moundCount, numBands) {
+      const width = outputCanvas.width;
+      const height = outputCanvas.height;
+
+      // 1) Build gradient from the original image
+      const gradient = buildGradientFromImage(imageData, numBands);
+
+      // 2) Build mounds heightfield
+      const moundHeights = generateMoundHeights(width, height, moundCount);
+
+      // 3) Draw sand layers
+      const outData = outputCtx.createImageData(width, height);
+      const data = outData.data;
+
+      // Background: same tone as page
+      const bgR = 242, bgG = 228, bgB = 201;
+
+      for (let y = 0; y < height; y++) {
+        const yFromBottom = height - 1 - y;
+
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          const moundHeight = moundHeights[x];
+
+          if (yFromBottom <= 0 || moundHeight <= 0 || yFromBottom > moundHeight) {
+            // outside mound -> background
+            data[idx]     = bgR;
+            data[idx + 1] = bgG;
+            data[idx + 2] = bgB;
+            data[idx + 3] = 255;
+          } else {
+            // inside mound -> choose band based on normalized height
+            const t = yFromBottom / moundHeight; // 0 bottom, 1 top
+            const bandIndex = Math.max(
+              0,
+              Math.min(numBands - 1, Math.floor(t * (numBands - 1)))
+            );
+            const c = gradient[bandIndex];
+
+            data[idx]     = c.r;
+            data[idx + 1] = c.g;
+            data[idx + 2] = c.b;
+            data[idx + 3] = 255;
+          }
+        }
+      }
+
+      outputCtx.putImageData(outData, 0, 0);
     }
 
     // ---- Image loading ---------------------------------------------------
@@ -295,7 +427,11 @@ Changelog:
           outputCtx.clearRect(0, 0, width, height);
 
           originalCtx.drawImage(img, 0, 0, width, height);
-          setStatus('Image loaded. Choose mound & jitter, then click "Apply Sand Layers".');
+
+          // store image data for gradient building
+          lastImageData = originalCtx.getImageData(0, 0, width, height);
+
+          setStatus('Image loaded. Choose mound count & bands, then click "Apply Sand Layers".');
           imageLoaded = true;
           applyBtn.disabled = false;
           downloadBtn.disabled = true;
@@ -311,170 +447,24 @@ Changelog:
       setStatus('Reading image...');
     });
 
-    // ---- Sand Layers transform (dark-bottom / light-top + jitter) -------
-
-    function transformSandLayers(imageData, moundCount, jitterFactor) {
-      const { data, width, height } = imageData;
-      const numPixels = width * height;
-
-      // 1) Build global list of pixels with HSV
-      const pixels = new Array(numPixels);
-      for (let i = 0; i < numPixels; i++) {
-        const offset = i * 4;
-        const r = data[offset];
-        const g = data[offset + 1];
-        const b = data[offset + 2];
-        const a = data[offset + 3];
-        const { h, s, v } = rgbToHsv(r, g, b);
-
-        pixels[i] = { r, g, b, a, h, s, v };
-      }
-
-      // 2) Sort primarily by brightness (v), then hue (h), then saturation (s)
-      //    => dark (near black) first, bright (near white) last
-      pixels.sort((p1, p2) => {
-        if (p1.v !== p2.v) return p1.v - p2.v;    // dark -> light
-        if (p1.h !== p2.h) return p1.h - p2.h;    // within same brightness, smooth hue progression
-        return p1.s - p2.s;                       // then by saturation
-      });
-
-      // 3) Precompute mound centers (1–6 positions horizontally)
-      const m = Math.max(1, Math.min(6, moundCount));
-      const centers = [];
-      for (let i = 0; i < m; i++) {
-        const centerX = Math.round(((i + 0.5) * width) / m) - 1;
-        centers.push(Math.max(0, Math.min(width - 1, centerX)));
-      }
-
-      // Base jitter range: depends on image width and mound count
-      const baseJitter = width / (m * 10);
-      let jitterRange = Math.floor(baseJitter * jitterFactor);
-      if (jitterRange < 0) jitterRange = 0;
-
-      // 4) Output buffer and occupancy check
-      const newData = new Uint8ClampedArray(data.length); // all zeros => alpha 0 => empty
-
-      function isEmpty(x, y) {
-        if (x < 0 || x >= width || y < 0 || y >= height) return false;
-        const offset = (y * width + x) * 4;
-        return newData[offset + 3] === 0; // alpha 0 => empty
-      }
-
-      function setPixel(x, y, pixel) {
-        const offset = (y * width + x) * 4;
-        newData[offset]     = pixel.r;
-        newData[offset + 1] = pixel.g;
-        newData[offset + 2] = pixel.b;
-        newData[offset + 3] = pixel.a; // keep original alpha
-      }
-
-      // 5) Falling sand: gravity + diagonal slide => roughly triangular mounds
-      function dropGrain(pixel) {
-        // Choose mound center and starting x with jitter
-        const centerIndex = Math.floor(Math.random() * m);
-        const baseX = centers[centerIndex];
-
-        let x = baseX;
-        if (jitterRange > 0) {
-          x = baseX + randomInt(-jitterRange, jitterRange);
-        }
-        if (x < 0) x = 0;
-        if (x >= width) x = width - 1;
-
-        let y = 0;
-
-        // Safety iteration cap to avoid rare infinite loops
-        let steps = 0;
-        const maxSteps = height * 3;
-
-        while (steps < maxSteps) {
-          steps++;
-
-          // If we're at the bottom row, settle here if free
-          if (y === height - 1) {
-            if (isEmpty(x, y)) {
-              setPixel(x, y, pixel);
-            }
-            break;
-          }
-
-          // If cell directly below is free, fall straight down
-          if (isEmpty(x, y + 1)) {
-            y++;
-            continue;
-          }
-
-          // Below is blocked; try to slide diagonally down-left or down-right
-          const canLeft  = x > 0 && isEmpty(x - 1, y + 1);
-          const canRight = x < width - 1 && isEmpty(x + 1, y + 1);
-
-          if (!canLeft && !canRight) {
-            // No place to go, settle here if free
-            if (isEmpty(x, y)) {
-              setPixel(x, y, pixel);
-            }
-            break;
-          }
-
-          if (canLeft && canRight) {
-            // Randomly choose left or right
-            if (Math.random() < 0.5) {
-              x--;
-            } else {
-              x++;
-            }
-            y++;
-          } else if (canLeft) {
-            x--;
-            y++;
-          } else {
-            x++;
-            y++;
-          }
-        }
-      }
-
-      // 6) Drop all pixels in dark->light ribbon order
-      for (let i = 0; i < pixels.length; i++) {
-        dropGrain(pixels[i]);
-      }
-
-      // Fill any leftover fully empty pixels with opaque black to avoid transparency gaps
-      for (let i = 0; i < newData.length; i += 4) {
-        if (newData[i + 3] === 0) {
-          newData[i] = 0;
-          newData[i + 1] = 0;
-          newData[i + 2] = 0;
-          newData[i + 3] = 255;
-        }
-      }
-
-      return new ImageData(newData, width, height);
-    }
-
     // ---- Apply button ----------------------------------------------------
 
     applyBtn.addEventListener('click', () => {
-      if (!imageLoaded) {
+      if (!imageLoaded || !lastImageData) {
         alert('Please load an image first.');
         return;
       }
 
-      const moundCount   = parseInt(moundsSelect.value, 10) || 2;
-      const jitterFactor = parseFloat(jitterSelect.value) || 0;
+      const moundCount = parseInt(moundsSelect.value, 10) || 2;
+      const numBands   = parseInt(bandsSelect.value, 10) || 30;
 
-      const width = originalCanvas.width;
-      const height = originalCanvas.height;
-      const imageData = originalCtx.getImageData(0, 0, width, height);
-
-      setStatus('Processing Sand Layers...');
+      setStatus('Rendering Sand Layers...');
       applyBtn.disabled = true;
       downloadBtn.disabled = true;
 
       setTimeout(() => {
         try {
-          const result = transformSandLayers(imageData, moundCount, jitterFactor);
-          outputCtx.putImageData(result, 0, 0);
+          renderSandLayers(lastImageData, moundCount, numBands);
           setStatus('Done. You can download the result.');
           downloadBtn.disabled = false;
         } catch (err) {
