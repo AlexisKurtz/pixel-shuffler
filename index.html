@@ -1,21 +1,18 @@
 <!--
 Pixel Shuffler - Sand Layers
-Version: 0.9.0
+Version: 0.9.1
 
 Changelog:
+- 0.9.1
+  - Simplified color sorting to use only brightness (V in HSV) so colors are
+    grouped more strongly from dark to light. This helps avoid interleaving
+    of hues (e.g., green/yellow/green/yellow) and produces clearer stacked
+    layers: darkest colors at the bottom, brightest at the top.
+  - Still uses true pixel shuffling: no pixels are created or removed; the
+    output image contains exactly the original pixels in a new arrangement.
 - 0.9.0
-  - Enforced true pixel shuffling: no new colors are created, no pixels removed.
-    The output image uses exactly the same pixels as the input, just rearranged.
-  - Introduced a mound-shaped layout via a heightfield:
-      * For each (x, y) position we compute a "position in stack" value t based
-        on smooth overlapping mounds.
-      * We also compute a global color ordering from the original image by
-        converting pixels to HSV and sorting by brightness (V), then hue (H),
-        then saturation (S).
-      * Sorted pixels are assigned to positions sorted by t, so darker pixels
-        tend to go to the bottom of mounds and brighter ones to the top/sky.
-- 0.8.0
-  - (Deprecated) Gradient-based contour rendering using synthesized colors.
+  - Introduced mound-shaped layout with a heightfield and mapped original
+    pixels (sorted by HSV) to positions sorted by stack position t.
 -->
 
 <!DOCTYPE html>
@@ -193,7 +190,7 @@ Changelog:
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.9.0';
+    const APP_VERSION = '0.9.1';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
     document.querySelector('.js-version-footer').textContent = APP_VERSION;
 
@@ -290,7 +287,7 @@ Changelog:
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      // 1) Extract pixels and convert to HSV for sorting
+      // 1) Extract pixels and convert to HSV for brightness
       const pixels = new Array(numPixels);
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
@@ -299,16 +296,12 @@ Changelog:
         const b = data[offset + 2];
         const a = data[offset + 3];
 
-        const { h, s, v } = rgbToHsv(r, g, b);
-        pixels[i] = { r, g, b, a, h, s, v };
+        const { v } = rgbToHsv(r, g, b);
+        pixels[i] = { r, g, b, a, v };
       }
 
-      // 2) Sort pixels: dark -> light, then hue, then saturation
-      pixels.sort((p1, p2) => {
-        if (p1.v !== p2.v) return p1.v - p2.v;
-        if (p1.h !== p2.h) return p1.h - p2.h;
-        return p1.s - p2.s;
-      });
+      // 2) Sort pixels only by brightness: dark -> light
+      pixels.sort((p1, p2) => p1.v - p2.v);
 
       // 3) Build mound profile (normalized heights)
       const profile = generateMoundProfile(width, moundCount);
@@ -345,7 +338,7 @@ Changelog:
         }
       }
 
-      // 5) Sort coordinates by t
+      // 5) Sort coordinates by t (bottom of mounds -> top -> sky)
       coords.sort((c1, c2) => c1.t - c2.t);
 
       // 6) Create new image data and assign pixels according to sorted order
