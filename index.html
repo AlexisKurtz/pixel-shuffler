@@ -1,18 +1,23 @@
 <!--
-Pixel Shuffler - Sand Layers
-Version: 0.9.1
+Pixel Shuffler - Sand Layers + Vertical Shift
+Version: 0.10.0
 
 Changelog:
+- 0.10.0
+  - Added a new "Vertical Shift" mode:
+      * True pixel displacement effect.
+      * Columns are processed in horizontal blocks of size X pixels (user-defined).
+      * For each block:
+          - First block: shift its columns UP by X pixels (with vertical wrap).
+          - Next block: shift its columns DOWN by X pixels.
+          - Alternating up/down until the right edge of the image.
+      * No pixel is created or removed; it's a pure rearrangement.
 - 0.9.1
-  - Simplified color sorting to use only brightness (V in HSV) so colors are
-    grouped more strongly from dark to light. This helps avoid interleaving
-    of hues (e.g., green/yellow/green/yellow) and produces clearer stacked
-    layers: darkest colors at the bottom, brightest at the top.
-  - Still uses true pixel shuffling: no pixels are created or removed; the
-    output image contains exactly the original pixels in a new arrangement.
+  - Simplified color sorting in Sand Layout mode to brightness-only (V in HSV),
+    producing clearer stacked layers from dark to light.
 - 0.9.0
-  - Introduced mound-shaped layout with a heightfield and mapped original
-    pixels (sorted by HSV) to positions sorted by stack position t.
+  - Introduced mound-shaped layout and mapping of original pixels (sorted by HSV)
+    to positions sorted by stack position t (Sand Layout mode).
 -->
 
 <!DOCTYPE html>
@@ -76,7 +81,7 @@ Changelog:
       font-size: 0.9rem;
     }
 
-    select, button {
+    select, button, input[type="number"] {
       background: #222;
       color: #f5f5f5;
       border: 1px solid #444;
@@ -93,6 +98,10 @@ Changelog:
     button:disabled {
       opacity: 0.4;
       cursor: default;
+    }
+
+    input[type="number"] {
+      width: 70px;
     }
 
     .canvases {
@@ -154,6 +163,14 @@ Changelog:
       </label>
 
       <label>
+        Mode:
+        <select id="modeSelect">
+          <option value="sand">Sand Layout</option>
+          <option value="verticalShift">Vertical Shift</option>
+        </select>
+      </label>
+
+      <label id="moundsLabel">
         Mounds:
         <select id="moundsSelect">
           <option value="1">1</option>
@@ -165,7 +182,12 @@ Changelog:
         </select>
       </label>
 
-      <button id="applyBtn" disabled>Apply Sand Layout</button>
+      <label id="shiftLabel" style="display:none;">
+        Shift size (px):
+        <input type="number" id="shiftSizeInput" min="1" max="500" value="20" />
+      </label>
+
+      <button id="applyBtn" disabled>Apply</button>
       <button id="downloadBtn" disabled>Download Result</button>
 
       <span class="status" id="statusText"></span>
@@ -177,29 +199,33 @@ Changelog:
         <canvas id="originalCanvas"></canvas>
       </div>
       <div class="canvas-wrapper">
-        <h2>Sand Layout Output</h2>
+        <h2>Output</h2>
         <canvas id="outputCanvas"></canvas>
       </div>
     </div>
   </div>
 
   <div class="footer">
-    <span>Upload an image, choose mound count, then click "Apply Sand Layout".</span>
+    <span>Select a mode, tweak parameters, and click "Apply".</span>
     <span>Version: <span class="js-version-footer"></span></span>
   </div>
 
   <script>
     // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.9.1';
+    const APP_VERSION = '0.10.0';
     document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
     document.querySelector('.js-version-footer').textContent = APP_VERSION;
 
     // ---- DOM elements ----------------------------------------------------
-    const fileInput     = document.getElementById('fileInput');
-    const moundsSelect  = document.getElementById('moundsSelect');
-    const applyBtn      = document.getElementById('applyBtn');
-    const downloadBtn   = document.getElementById('downloadBtn');
-    const statusText    = document.getElementById('statusText');
+    const fileInput      = document.getElementById('fileInput');
+    const modeSelect     = document.getElementById('modeSelect');
+    const moundsLabel    = document.getElementById('moundsLabel');
+    const moundsSelect   = document.getElementById('moundsSelect');
+    const shiftLabel     = document.getElementById('shiftLabel');
+    const shiftSizeInput = document.getElementById('shiftSizeInput');
+    const applyBtn       = document.getElementById('applyBtn');
+    const downloadBtn    = document.getElementById('downloadBtn');
+    const statusText     = document.getElementById('statusText');
 
     const originalCanvas = document.getElementById('originalCanvas');
     const outputCanvas   = document.getElementById('outputCanvas');
@@ -282,12 +308,13 @@ Changelog:
       return profile;
     }
 
-    // Main transform: reorder existing pixels into mound-shaped layout
+    // ---- Sand Layout transform (existing mode) ---------------------------
+
     function transformToSandLayout(imageData, moundCount) {
       const { data, width, height } = imageData;
       const numPixels = width * height;
 
-      // 1) Extract pixels and convert to HSV for brightness
+      // 1) Extract pixels and compute brightness (V)
       const pixels = new Array(numPixels);
       for (let i = 0; i < numPixels; i++) {
         const offset = i * 4;
@@ -358,91 +385,52 @@ Changelog:
       return new ImageData(outData, width, height);
     }
 
-    // ---- Image loading ---------------------------------------------------
+    // ---- Vertical Shift transform (new mode) -----------------------------
 
-    fileInput.addEventListener('change', (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
+    function transformVerticalShift(imageData, shiftSize) {
+      const { data, width, height } = imageData;
+      const outData = new Uint8ClampedArray(data.length);
 
-      const reader = new FileReader();
+      const step = Math.max(1, Math.floor(shiftSize));
+      const effectiveShift = step % height; // avoid useless full rotations
 
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          // Resize large images down for performance
-          const maxSide = 800;
-          let { width, height } = img;
+      for (let x = 0; x < width; x++) {
+        const blockIndex = Math.floor(x / step);
+        const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
+        // direction > 0 => shift DOWN by 'direction' pixels
+        // direction < 0 => shift UP   by |direction| pixels
 
-          if (width > maxSide || height > maxSide) {
-            const scale = Math.min(maxSide / width, maxSide / height);
-            width = Math.round(width * scale);
-            height = Math.round(height * scale);
-          }
+        for (let y = 0; y < height; y++) {
+          const srcY = (y - direction + height) % height; // wrap vertically
 
-          originalCanvas.width  = width;
-          originalCanvas.height = height;
-          outputCanvas.width    = width;
-          outputCanvas.height   = height;
+          const srcOffset = (srcY * width + x) * 4;
+          const dstOffset = (y * width + x) * 4;
 
-          originalCtx.clearRect(0, 0, width, height);
-          outputCtx.clearRect(0, 0, width, height);
-
-          originalCtx.drawImage(img, 0, 0, width, height);
-          lastImageData = originalCtx.getImageData(0, 0, width, height);
-
-          setStatus('Image loaded. Choose mound count and click "Apply Sand Layout".');
-          imageLoaded = true;
-          applyBtn.disabled = false;
-          downloadBtn.disabled = true;
-        };
-        img.src = e.target.result;
-      };
-
-      reader.onerror = () => {
-        setStatus('Error loading image. Please try another file.');
-      };
-
-      reader.readAsDataURL(file);
-      setStatus('Reading image...');
-    });
-
-    // ---- Apply button ----------------------------------------------------
-
-    applyBtn.addEventListener('click', () => {
-      if (!imageLoaded || !lastImageData) {
-        alert('Please load an image first.');
-        return;
+          outData[dstOffset]     = data[srcOffset];
+          outData[dstOffset + 1] = data[srcOffset + 1];
+          outData[dstOffset + 2] = data[srcOffset + 2];
+          outData[dstOffset + 3] = data[srcOffset + 3];
+        }
       }
 
-      const moundCount = parseInt(moundsSelect.value, 10) || 2;
+      return new ImageData(outData, width, height);
+    }
 
-      setStatus('Reordering pixels into sand layout...');
-      applyBtn.disabled = true;
-      downloadBtn.disabled = true;
+    // ---- Mode UI toggle --------------------------------------------------
 
-      setTimeout(() => {
-        try {
-          const result = transformToSandLayout(lastImageData, moundCount);
-          outputCtx.putImageData(result, 0, 0);
-          setStatus('Done. You can download the result.');
-          downloadBtn.disabled = false;
-        } catch (err) {
-          console.error(err);
-          setStatus('Error during processing.');
-        } finally {
-          applyBtn.disabled = false;
-        }
-      }, 30);
+    modeSelect.addEventListener('change', () => {
+      const mode = modeSelect.value;
+      if (mode === 'sand') {
+        moundsLabel.style.display = '';
+        shiftLabel.style.display = 'none';
+        setStatus('Sand Layout mode: pixels reordered into mound-shaped layers.');
+      } else {
+        moundsLabel.style.display = 'none';
+        shiftLabel.style.display = '';
+        setStatus('Vertical Shift mode: columns zig-zag up/down by the selected size.');
+      }
     });
 
-    // ---- Download button -------------------------------------------------
+    // ---- Image loading ---------------------------------------------------
 
-    downloadBtn.addEventListener('click', () => {
-      const link = document.createElement('a');
-      link.download = 'pixel-sand-layout.png';
-      link.href = outputCanvas.toDataURL('image/png');
-      link.click();
-    });
-  </script>
-</body>
-</html>
+    fileInput.addEventListener('chan
