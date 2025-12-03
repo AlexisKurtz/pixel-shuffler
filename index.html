@@ -1,19 +1,17 @@
 <!--
-Pixel Shuffler - Sand Layers + Combined Grid Shift
-Version: 0.12.1
+Pixel Shuffler - Multi-Effect Edition
+Version: 0.20.0
 
-Changelog:
-- 0.12.1
-  - Replaced numeric inputs for vertical and horizontal shift with sliders
-    (range 1–100) and live value readouts.
-  - Added a "Random" button:
-      * When shifts are linked, both vertical and horizontal sliders get the
-        same random value between 1 and 100.
-      * When unlinked, vertical and horizontal sliders each get their own
-        random value between 1 and 100.
-- 0.12.0
-  - Introduced "Grid Shift" mode combining vertical + horizontal displacements
-    with independent shift sizes and a link toggle.
+Changelog (high level):
+- Mode system reorganized into Category + Effect:
+  * Classic: Sand Layout, Grid Shift
+  * Distortion: Sine Warp, Noise Warp, Offset Map
+  * Glitch: RGB Split, Tile Scramble
+  * Warping: Polar Swirl, Flow Field, Depth Warp
+  * Experimental: Fractal Warp, Feedback Warp
+
+- All effects are pure pixel rearrangements (no blur, no resampling filters).
+- Image persistence via localStorage (last image auto-restored on refresh).
 -->
 
 <!DOCTYPE html>
@@ -48,7 +46,7 @@ Changelog:
     }
 
     .app {
-      max-width: 1000px;
+      max-width: 1100px;
       width: 100%;
       display: flex;
       flex-direction: column;
@@ -95,14 +93,31 @@ Changelog:
       cursor: pointer;
     }
 
-    #linkShiftsBtn {
-      padding: 6px 10px;
-      font-size: 0.85rem;
+    .param-panel {
+      display: none;
+      background: #181818;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
-    #randomShiftBtn {
-      padding: 6px 10px;
-      font-size: 0.85rem;
+    .param-panel.active {
+      display: flex;
+    }
+
+    .param-panel label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .param-panel span.value {
+      min-width: 26px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
     }
 
     .canvases {
@@ -146,7 +161,16 @@ Changelog:
       align-items: baseline;
       justify-content: space-between;
       width: 100%;
-      max-width: 1000px;
+      max-width: 1100px;
+    }
+
+    .pill {
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #222;
+      border: 1px solid #444;
+      opacity: 0.8;
     }
   </style>
 </head>
@@ -157,6 +181,7 @@ Changelog:
       <span class="version-inline js-version-inline"></span>
     </h1>
 
+    <!-- Top-level controls -->
     <div class="controls">
       <label>
         Image:
@@ -164,16 +189,36 @@ Changelog:
       </label>
 
       <label>
-        Mode:
-        <select id="modeSelect">
-          <option value="sand">Sand Layout</option>
-          <option value="gridShift">Grid Shift</option>
+        Category:
+        <select id="categorySelect">
+          <option value="classic">Classic</option>
+          <option value="distortion">Distortion</option>
+          <option value="glitch">Glitch</option>
+          <option value="warping">Warping</option>
+          <option value="experimental">Experimental</option>
         </select>
       </label>
 
-      <label id="moundsLabel">
+      <label>
+        Effect:
+        <select id="effectSelect">
+          <!-- Will be populated dynamically based on category -->
+        </select>
+      </label>
+
+      <button id="applyBtn">Apply</button>
+      <button id="downloadBtn" disabled>Download Result</button>
+
+      <span class="status" id="statusText"></span>
+    </div>
+
+    <!-- Parameter panels -->
+    <!-- Classic: Sand Layout -->
+    <div class="param-panel" data-effect="classic:sand">
+      <span class="pill">Classic · Sand Layout</span>
+      <label>
         Mounds:
-        <select id="moundsSelect">
+        <select id="sandMoundsSelect">
           <option value="1">1</option>
           <option value="2" selected>2</option>
           <option value="3">3</option>
@@ -182,33 +227,184 @@ Changelog:
           <option value="6">6</option>
         </select>
       </label>
-
-      <label id="vShiftLabel" style="display:none;">
-        Vertical shift:
-        <input type="range" id="vShiftInput" min="1" max="100" value="20" />
-        <span id="vShiftValue">20</span>px
-      </label>
-
-      <label id="hShiftLabel" style="display:none;">
-        Horizontal shift:
-        <input type="range" id="hShiftInput" min="1" max="100" value="20" />
-        <span id="hShiftValue">20</span>px
-      </label>
-
-      <button id="linkShiftsBtn" type="button" style="display:none;" aria-pressed="true" title="Link/unlink vertical and horizontal shift values">
-        🔗 Linked
-      </button>
-
-      <button id="randomShiftBtn" type="button" style="display:none;" title="Randomize vertical and horizontal shifts">
-        🎲 Random
-      </button>
-
-      <button id="applyBtn">Apply</button>
-      <button id="downloadBtn" disabled>Download Result</button>
-
-      <span class="status" id="statusText"></span>
     </div>
 
+    <!-- Classic: Grid Shift -->
+    <div class="param-panel" data-effect="classic:gridShift">
+      <span class="pill">Classic · Grid Shift</span>
+      <label>
+        Vertical shift:
+        <input type="range" id="gridVShift" min="1" max="100" value="20">
+        <span class="value" id="gridVShiftVal">20</span>px
+      </label>
+      <label>
+        Horizontal shift:
+        <input type="range" id="gridHShift" min="1" max="100" value="20">
+        <span class="value" id="gridHShiftVal">20</span>px
+      </label>
+    </div>
+
+    <!-- Distortion: Sine Warp -->
+    <div class="param-panel" data-effect="distortion:sine">
+      <span class="pill">Distortion · Sine Warp</span>
+      <label>
+        Amplitude:
+        <input type="range" id="sineAmp" min="1" max="100" value="20">
+        <span class="value" id="sineAmpVal">20</span>px
+      </label>
+      <label>
+        Frequency:
+        <input type="range" id="sineFreq" min="5" max="200" value="60">
+        <span class="value" id="sineFreqVal">60</span>
+      </label>
+    </div>
+
+    <!-- Distortion: Noise Warp -->
+    <div class="param-panel" data-effect="distortion:noise">
+      <span class="pill">Distortion · Noise Warp</span>
+      <label>
+        Strength:
+        <input type="range" id="noiseStrength" min="1" max="100" value="25">
+        <span class="value" id="noiseStrengthVal">25</span>px
+      </label>
+      <label>
+        Scale:
+        <input type="range" id="noiseScale" min="5" max="200" value="40">
+        <span class="value" id="noiseScaleVal">40</span>
+      </label>
+    </div>
+
+    <!-- Distortion: Offset Map -->
+    <div class="param-panel" data-effect="distortion:offsetMap">
+      <span class="pill">Distortion · Offset Map</span>
+      <label>
+        Source:
+        <select id="offsetSource">
+          <option value="brightness">Brightness</option>
+          <option value="hue">Hue</option>
+          <option value="saturation">Saturation</option>
+        </select>
+      </label>
+      <label>
+        Direction:
+        <select id="offsetDirection">
+          <option value="vertical">Vertical</option>
+          <option value="horizontal">Horizontal</option>
+        </select>
+      </label>
+      <label>
+        Strength:
+        <input type="range" id="offsetStrength" min="1" max="100" value="30">
+        <span class="value" id="offsetStrengthVal">30</span>px
+      </label>
+    </div>
+
+    <!-- Glitch: RGB Split -->
+    <div class="param-panel" data-effect="glitch:rgbSplit">
+      <span class="pill">Glitch · RGB Split</span>
+      <label>
+        Red shift:
+        <input type="range" id="rgbRShift" min="-50" max="50" value="10">
+        <span class="value" id="rgbRShiftVal">10</span>px
+      </label>
+      <label>
+        Green shift:
+        <input type="range" id="rgbGShift" min="-50" max="50" value="-5">
+        <span class="value" id="rgbGShiftVal">-5</span>px
+      </label>
+      <label>
+        Blue shift:
+        <input type="range" id="rgbBShift" min="-50" max="50" value="5">
+        <span class="value" id="rgbBShiftVal">5</span>px
+      </label>
+    </div>
+
+    <!-- Glitch: Tile Scramble -->
+    <div class="param-panel" data-effect="glitch:tileScramble">
+      <span class="pill">Glitch · Tile Scramble</span>
+      <label>
+        Tile size:
+        <input type="range" id="tileSize" min="4" max="80" value="24">
+        <span class="value" id="tileSizeVal">24</span>px
+      </label>
+      <label>
+        Chaos:
+        <input type="range" id="tileChaos" min="0" max="100" value="70">
+        <span class="value" id="tileChaosVal">70</span>%
+      </label>
+    </div>
+
+    <!-- Warping: Polar Swirl -->
+    <div class="param-panel" data-effect="warping:polar">
+      <span class="pill">Warping · Polar Swirl</span>
+      <label>
+        Swirl strength:
+        <input type="range" id="polarStrength" min="-200" max="200" value="80">
+        <span class="value" id="polarStrengthVal">80</span>
+      </label>
+      <label>
+        Radius factor:
+        <input type="range" id="polarRadius" min="20" max="200" value="100">
+        <span class="value" id="polarRadiusVal">100</span>%
+      </label>
+    </div>
+
+    <!-- Warping: Flow Field -->
+    <div class="param-panel" data-effect="warping:flow">
+      <span class="pill">Warping · Flow Field</span>
+      <label>
+        Scale:
+        <input type="range" id="flowScale" min="10" max="200" value="80">
+        <span class="value" id="flowScaleVal">80</span>
+      </label>
+      <label>
+        Strength:
+        <input type="range" id="flowStrength" min="1" max="80" value="25">
+        <span class="value" id="flowStrengthVal">25</span>px
+      </label>
+    </div>
+
+    <!-- Warping: Depth Warp -->
+    <div class="param-panel" data-effect="warping:depth">
+      <span class="pill">Warping · Depth Warp</span>
+      <label>
+        Strength:
+        <input type="range" id="depthStrength" min="1" max="100" value="30">
+        <span class="value" id="depthStrengthVal">30</span>px
+      </label>
+    </div>
+
+    <!-- Experimental: Fractal Warp -->
+    <div class="param-panel" data-effect="experimental:fractal">
+      <span class="pill">Experimental · Fractal Warp</span>
+      <label>
+        Iterations:
+        <input type="range" id="fractalIter" min="1" max="10" value="3">
+        <span class="value" id="fractalIterVal">3</span>
+      </label>
+      <label>
+        Shift:
+        <input type="range" id="fractalShift" min="1" max="50" value="10">
+        <span class="value" id="fractalShiftVal">10</span>px
+      </label>
+    </div>
+
+    <!-- Experimental: Feedback Warp -->
+    <div class="param-panel" data-effect="experimental:feedback">
+      <span class="pill">Experimental · Feedback Warp</span>
+      <label>
+        Iterations:
+        <input type="range" id="feedbackIter" min="1" max="20" value="5">
+        <span class="value" id="feedbackIterVal">5</span>
+      </label>
+      <label>
+        Strength:
+        <input type="range" id="feedbackStrength" min="1" max="50" value="12">
+        <span class="value" id="feedbackStrengthVal">12</span>px
+      </label>
+    </div>
+
+    <!-- Canvases -->
     <div class="canvases">
       <div class="canvas-wrapper">
         <h2>Original</h2>
@@ -222,146 +418,107 @@ Changelog:
   </div>
 
   <div class="footer">
-    <span>Select a mode, tweak parameters, and click "Apply".</span>
+    <span>Select a category + effect, tweak parameters, then click "Apply".</span>
     <span>Version: <span class="js-version-footer"></span></span>
   </div>
 
   <script>
     window.onload = function () {
-      const APP_VERSION = '0.12.1';
-      const STORAGE_KEY = 'pixelShuffler_lastImageDataUrl_v1';
+      const APP_VERSION = '0.20.0';
+      const STORAGE_KEY = 'pixelShuffler_lastImageDataUrl_v2';
 
       const vInline = document.querySelector('.js-version-inline');
       const vFooter = document.querySelector('.js-version-footer');
       if (vInline) vInline.textContent = `· v${APP_VERSION}`;
       if (vFooter) vFooter.textContent = APP_VERSION;
 
-      const fileInput      = document.getElementById('fileInput');
-      const modeSelect     = document.getElementById('modeSelect');
-      const moundsLabel    = document.getElementById('moundsLabel');
-      const moundsSelect   = document.getElementById('moundsSelect');
-      const vShiftLabel    = document.getElementById('vShiftLabel');
-      const hShiftLabel    = document.getElementById('hShiftLabel');
-      const vShiftInput    = document.getElementById('vShiftInput');
-      const hShiftInput    = document.getElementById('hShiftInput');
-      const vShiftValue    = document.getElementById('vShiftValue');
-      const hShiftValue    = document.getElementById('hShiftValue');
-      const linkShiftsBtn  = document.getElementById('linkShiftsBtn');
-      const randomShiftBtn = document.getElementById('randomShiftBtn');
-      const applyBtn       = document.getElementById('applyBtn');
-      const downloadBtn    = document.getElementById('downloadBtn');
-      const statusText     = document.getElementById('statusText');
+      const fileInput       = document.getElementById('fileInput');
+      const categorySelect  = document.getElementById('categorySelect');
+      const effectSelect    = document.getElementById('effectSelect');
+      const applyBtn        = document.getElementById('applyBtn');
+      const downloadBtn     = document.getElementById('downloadBtn');
+      const statusText      = document.getElementById('statusText');
+      const paramPanels     = document.querySelectorAll('.param-panel');
 
-      const originalCanvas = document.getElementById('originalCanvas');
-      const outputCanvas   = document.getElementById('outputCanvas');
-      const originalCtx    = originalCanvas.getContext('2d');
-      const outputCtx      = outputCanvas.getContext('2d');
+      const originalCanvas  = document.getElementById('originalCanvas');
+      const outputCanvas    = document.getElementById('outputCanvas');
+      const originalCtx     = originalCanvas.getContext('2d');
+      const outputCtx       = outputCanvas.getContext('2d');
 
       let imageLoaded = false;
       let lastImageData = null;
-      let linkShifts = true;
 
       function setStatus(msg) {
         statusText.textContent = msg || '';
       }
 
-      function updateLinkButton() {
-        linkShiftsBtn.setAttribute('aria-pressed', linkShifts ? 'true' : 'false');
-        linkShiftsBtn.textContent = linkShifts ? '🔗 Linked' : '⛓ Unlinked';
+      // --- Small helper: clamp -------------------------------------------
+      function clamp(v, min, max) {
+        return v < min ? min : (v > max ? max : v);
       }
 
-      function syncSliderDisplays() {
-        vShiftValue.textContent = vShiftInput.value;
-        hShiftValue.textContent = hShiftInput.value;
-      }
-
-      // RGB -> HSV helper
+      // --- RGB → HSV ------------------------------------------------------
       function rgbToHsv(r, g, b) {
-        r /= 255;
-        g /= 255;
-        b /= 255;
-
+        r /= 255; g /= 255; b /= 255;
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
-        const d   = max - min;
-
+        const d = max - min;
         let h = 0;
         const v = max;
         const s = max === 0 ? 0 : d / max;
-
         if (d !== 0) {
-          if (max === r) {
-            h = ((g - b) / d) % 6;
-          } else if (max === g) {
-            h = (b - r) / d + 2;
-          } else {
-            h = (r - g) / d + 4;
-          }
+          if (max === r)      h = ((g - b) / d) % 6;
+          else if (max === g) h = (b - r) / d + 2;
+          else                h = (r - g) / d + 4;
           h *= 60;
           if (h < 0) h += 360;
         }
-
         return { h, s, v };
       }
 
-      // Mound profile for Sand Layout
+      // --- Classic: Sand Layout helpers ----------------------------------
+      const sandMoundsSelect = document.getElementById('sandMoundsSelect');
+
       function generateMoundProfile(width, moundCount) {
         const m = Math.max(1, Math.min(6, moundCount));
         const centers = [];
-        const amplitudes = [];
+        const amps = [];
         const sigmas = [];
 
         for (let i = 0; i < m; i++) {
-          const centerX = (i + 0.5) * (width / m);
-          centers.push(centerX);
+          centers.push((i + 0.5) * (width / m));
         }
-
         for (let i = 0; i < m; i++) {
-          const amp = 0.6 + Math.random() * 0.3;
-          amplitudes.push(amp);
-          const sigma = width / (m * 2.5);
-          sigmas.push(sigma);
+          amps.push(0.6 + Math.random() * 0.3);
+          sigmas.push(width / (m * 2.5));
         }
-
         const profile = new Float32Array(width);
-
         for (let x = 0; x < width; x++) {
           let hNorm = 0;
           for (let i = 0; i < m; i++) {
             const dx = x - centers[i];
             const s = sigmas[i];
-            const gauss = amplitudes[i] * Math.exp(-0.5 * (dx * dx) / (s * s));
-            if (gauss > hNorm) hNorm = gauss;
+            const g = amps[i] * Math.exp(-0.5 * (dx * dx) / (s * s));
+            if (g > hNorm) hNorm = g;
           }
-          if (hNorm > 1) hNorm = 1;
-          profile[x] = hNorm;
+          profile[x] = hNorm > 1 ? 1 : hNorm;
         }
-
         return profile;
       }
 
-      // Sand Layout transform
-      function transformToSandLayout(imageData, moundCount) {
+      function transformSandLayout(imageData, moundCount) {
         const { data, width, height } = imageData;
         const numPixels = width * height;
-
         const pixels = new Array(numPixels);
         for (let i = 0; i < numPixels; i++) {
-          const offset = i * 4;
-          const r = data[offset];
-          const g = data[offset + 1];
-          const b = data[offset + 2];
-          const a = data[offset + 3];
-
+          const o = i * 4;
+          const r = data[o], g = data[o+1], b = data[o+2], a = data[o+3];
           const { v } = rgbToHsv(r, g, b);
           pixels[i] = { r, g, b, a, v };
         }
-
-        // brightness-only sort: dark -> light
-        pixels.sort((p1, p2) => p1.v - p2.v);
+        pixels.sort((a, b) => a.v - b.v);
 
         const profile = generateMoundProfile(width, moundCount);
-
         const coords = new Array(numPixels);
         const insideWeight = 0.88;
 
@@ -372,253 +529,714 @@ Changelog:
             const hNorm = profile[x];
             const moundHeight = hNorm * (height - 1);
             let t;
-
             if (moundHeight > 1 && yFromBottom <= moundHeight) {
               const tInside = moundHeight <= 0 ? 0 : (yFromBottom / moundHeight);
               t = tInside * insideWeight;
             } else {
-              const remainingHeight = (height - 1) - moundHeight;
-              if (remainingHeight <= 0) {
+              const rem = (height - 1) - moundHeight;
+              if (rem <= 0) {
                 t = insideWeight;
               } else {
                 const yAbove = yFromBottom - moundHeight;
-                const tOutside = Math.max(0, Math.min(1, yAbove / remainingHeight));
+                const tOutside = clamp(yAbove / rem, 0, 1);
                 t = insideWeight + tOutside * (1 - insideWeight);
               }
             }
-
             coords[idx] = { x, y, t };
           }
         }
 
-        coords.sort((c1, c2) => c1.t - c2.t);
-
+        coords.sort((a, b) => a.t - b.t);
         const outData = new Uint8ClampedArray(data.length);
-
         for (let i = 0; i < numPixels; i++) {
           const { x, y } = coords[i];
           const p = pixels[i];
-          const offset = (y * width + x) * 4;
-
-          outData[offset]     = p.r;
-          outData[offset + 1] = p.g;
-          outData[offset + 2] = p.b;
-          outData[offset + 3] = p.a;
+          const o = (y * width + x) * 4;
+          outData[o] = p.r;
+          outData[o+1] = p.g;
+          outData[o+2] = p.b;
+          outData[o+3] = p.a;
         }
-
         return new ImageData(outData, width, height);
       }
 
-      // Combined Grid Shift transform
+      // --- Classic: Grid Shift -------------------------------------------
+      const gridVShift = document.getElementById('gridVShift');
+      const gridHShift = document.getElementById('gridHShift');
+      const gridVShiftVal = document.getElementById('gridVShiftVal');
+      const gridHShiftVal = document.getElementById('gridHShiftVal');
+      gridVShift.addEventListener('input', () => gridVShiftVal.textContent = gridVShift.value);
+      gridHShift.addEventListener('input', () => gridHShiftVal.textContent = gridHShift.value);
+      gridVShiftVal.textContent = gridVShift.value;
+      gridHShiftVal.textContent = gridHShift.value;
+
       function transformGridShift(imageData, vShiftSize, hShiftSize) {
         const { width, height } = imageData;
         let working = imageData.data;
 
-        // Vertical component
         const vStep = Math.max(1, Math.floor(vShiftSize));
         if (vStep > 0) {
-          const effectiveVShift = vStep % height;
-          const vOut = new Uint8ClampedArray(working.length);
-
+          const effV = vStep % height;
+          const out = new Uint8ClampedArray(working.length);
           for (let x = 0; x < width; x++) {
             const blockIndex = Math.floor(x / vStep);
-            const direction = (blockIndex % 2 === 0) ? -effectiveVShift : effectiveVShift;
-
+            const dir = (blockIndex % 2 === 0) ? -effV : effV;
             for (let y = 0; y < height; y++) {
-              const srcY = (y - direction + height) % height;
-              const srcOffset = (srcY * width + x) * 4;
-              const dstOffset = (y * width + x) * 4;
-
-              vOut[dstOffset]     = working[srcOffset];
-              vOut[dstOffset + 1] = working[srcOffset + 1];
-              vOut[dstOffset + 2] = working[srcOffset + 2];
-              vOut[dstOffset + 3] = working[srcOffset + 3];
+              const srcY = (y - dir + height) % height;
+              const so = (srcY * width + x) * 4;
+              const dof = (y * width + x) * 4;
+              out[dof] = working[so];
+              out[dof+1] = working[so+1];
+              out[dof+2] = working[so+2];
+              out[dof+3] = working[so+3];
             }
           }
-
-          working = vOut;
+          working = out;
         }
 
-        // Horizontal component
         const hStep = Math.max(1, Math.floor(hShiftSize));
         if (hStep > 0) {
-          const effectiveHShift = hStep % width;
-          const hOut = new Uint8ClampedArray(working.length);
-
+          const effH = hStep % width;
+          const out = new Uint8ClampedArray(working.length);
           for (let y = 0; y < height; y++) {
             const blockIndex = Math.floor(y / hStep);
-            const direction = (blockIndex % 2 === 0) ? -effectiveHShift : effectiveHShift;
-
+            const dir = (blockIndex % 2 === 0) ? -effH : effH;
             for (let x = 0; x < width; x++) {
-              const srcX = (x - direction + width) % width;
-              const srcOffset = (y * width + srcX) * 4;
-              const dstOffset = (y * width + x) * 4;
-
-              hOut[dstOffset]     = working[srcOffset];
-              hOut[dstOffset + 1] = working[srcOffset + 1];
-              hOut[dstOffset + 2] = working[srcOffset + 2];
-              hOut[dstOffset + 3] = working[srcOffset + 3];
+              const srcX = (x - dir + width) % width;
+              const so = (y * width + srcX) * 4;
+              const dof = (y * width + x) * 4;
+              out[dof] = working[so];
+              out[dof+1] = working[so+1];
+              out[dof+2] = working[so+2];
+              out[dof+3] = working[so+3];
             }
           }
-
-          working = hOut;
+          working = out;
         }
 
         return new ImageData(working, width, height);
       }
 
-      // Mode UI toggle
-      modeSelect.addEventListener('change', () => {
-        const mode = modeSelect.value;
-        if (mode === 'sand') {
-          moundsLabel.style.display   = '';
-          vShiftLabel.style.display   = 'none';
-          hShiftLabel.style.display   = 'none';
-          linkShiftsBtn.style.display = 'none';
-          randomShiftBtn.style.display = 'none';
-          setStatus('Sand Layout mode: pixels reordered into mound-shaped layers.');
-        } else {
-          moundsLabel.style.display    = 'none';
-          vShiftLabel.style.display    = '';
-          hShiftLabel.style.display    = '';
-          linkShiftsBtn.style.display  = '';
-          randomShiftBtn.style.display = '';
-          setStatus('Grid Shift mode: combined vertical and horizontal block displacements.');
+      // --- Distortion: Sine Warp -----------------------------------------
+      const sineAmp = document.getElementById('sineAmp');
+      const sineFreq = document.getElementById('sineFreq');
+      const sineAmpVal = document.getElementById('sineAmpVal');
+      const sineFreqVal = document.getElementById('sineFreqVal');
+      sineAmp.addEventListener('input', () => sineAmpVal.textContent = sineAmp.value);
+      sineFreq.addEventListener('input', () => sineFreqVal.textContent = sineFreq.value);
+      sineAmpVal.textContent = sineAmp.value;
+      sineFreqVal.textContent = sineFreq.value;
+
+      function transformSineWarp(imageData, amp, period) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const ampPx = amp;
+        const twoPi = Math.PI * 2;
+        const periodNorm = period;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const dx = Math.sin((y / periodNorm) * twoPi) * ampPx;
+            const dy = Math.sin((x / periodNorm) * twoPi) * ampPx;
+            let sx = Math.round(x + dx);
+            let sy = Math.round(y + dy);
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            const dof = (y * width + x) * 4;
+            out[dof] = data[so];
+            out[dof+1] = data[so+1];
+            out[dof+2] = data[so+2];
+            out[dof+3] = data[so+3];
+          }
         }
-      });
+        return new ImageData(out, width, height);
+      }
 
-      // Link/unlink shift values
-      linkShiftsBtn.addEventListener('click', () => {
-        linkShifts = !linkShifts;
-        if (linkShifts) {
-          // When re-linking, sync horizontal to vertical by default
-          hShiftInput.value = vShiftInput.value;
-          syncSliderDisplays();
+      // --- Simple 2D value noise (cheap) ---------------------------------
+      function hash2D(x, y) {
+        let h = x * 374761393 + y * 668265263;
+        h = (h ^ (h >> 13)) * 1274126177;
+        h = (h ^ (h >> 16)) >>> 0;
+        return h / 4294967295;
+      }
+
+      function noise2D(x, y, scale) {
+        const nx = x / scale;
+        const ny = y / scale;
+        const x0 = Math.floor(nx);
+        const y0 = Math.floor(ny);
+        const x1 = x0 + 1;
+        const y1 = y0 + 1;
+        const fx = nx - x0;
+        const fy = ny - y0;
+        const a = hash2D(x0, y0);
+        const b = hash2D(x1, y0);
+        const c = hash2D(x0, y1);
+        const d = hash2D(x1, y1);
+        const lerp = (p, q, t) => p + (q - p) * t;
+        const ab = lerp(a, b, fx);
+        const cd = lerp(c, d, fx);
+        return lerp(ab, cd, fy);
+      }
+
+      // --- Distortion: Noise Warp ----------------------------------------
+      const noiseStrength = document.getElementById('noiseStrength');
+      const noiseScale = document.getElementById('noiseScale');
+      const noiseStrengthVal = document.getElementById('noiseStrengthVal');
+      const noiseScaleVal = document.getElementById('noiseScaleVal');
+      noiseStrength.addEventListener('input', () => noiseStrengthVal.textContent = noiseStrength.value);
+      noiseScale.addEventListener('input', () => noiseScaleVal.textContent = noiseScale.value);
+      noiseStrengthVal.textContent = noiseStrength.value;
+      noiseScaleVal.textContent = noiseScale.value;
+
+      function transformNoiseWarp(imageData, strength, scale) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const s = strength;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const n1 = noise2D(x, y, scale) - 0.5;
+            const n2 = noise2D(x + 1000, y + 1000, scale) - 0.5;
+            let sx = Math.round(x + n1 * s * 2);
+            let sy = Math.round(y + n2 * s * 2);
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            const dof = (y * width + x) * 4;
+            out[dof] = data[so];
+            out[dof+1] = data[so+1];
+            out[dof+2] = data[so+2];
+            out[dof+3] = data[so+3];
+          }
         }
-        updateLinkButton();
-      });
+        return new ImageData(out, width, height);
+      }
 
-      vShiftInput.addEventListener('input', () => {
-        if (linkShifts) {
-          hShiftInput.value = vShiftInput.value;
+      // --- Distortion: Offset Map ----------------------------------------
+      const offsetSource = document.getElementById('offsetSource');
+      const offsetDirection = document.getElementById('offsetDirection');
+      const offsetStrength = document.getElementById('offsetStrength');
+      const offsetStrengthVal = document.getElementById('offsetStrengthVal');
+      offsetStrength.addEventListener('input', () => offsetStrengthVal.textContent = offsetStrength.value);
+      offsetStrengthVal.textContent = offsetStrength.value;
+
+      function transformOffsetMap(imageData, srcType, direction, strength) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const s = strength;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const o = (y * width + x) * 4;
+            const r = data[o], g = data[o+1], b = data[o+2];
+            const hsv = rgbToHsv(r, g, b);
+            let factor = 0;
+            if (srcType === 'brightness') factor = hsv.v;
+            else if (srcType === 'hue')   factor = hsv.h / 360;
+            else                          factor = hsv.s;
+            factor = factor * 2 - 1; // -1..1
+            let sx = x, sy = y;
+            if (direction === 'vertical') {
+              sy = Math.round(y + factor * s);
+            } else {
+              sx = Math.round(x + factor * s);
+            }
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            out[o] = data[so];
+            out[o+1] = data[so+1];
+            out[o+2] = data[so+2];
+            out[o+3] = data[so+3];
+          }
         }
-        syncSliderDisplays();
-      });
+        return new ImageData(out, width, height);
+      }
 
-      hShiftInput.addEventListener('input', () => {
-        if (linkShifts) {
-          vShiftInput.value = hShiftInput.value;
+      // --- Glitch: RGB Split ---------------------------------------------
+      const rgbRShift = document.getElementById('rgbRShift');
+      const rgbGShift = document.getElementById('rgbGShift');
+      const rgbBShift = document.getElementById('rgbBShift');
+      const rgbRShiftVal = document.getElementById('rgbRShiftVal');
+      const rgbGShiftVal = document.getElementById('rgbGShiftVal');
+      const rgbBShiftVal = document.getElementById('rgbBShiftVal');
+      const updateRgbVals = () => {
+        rgbRShiftVal.textContent = rgbRShift.value;
+        rgbGShiftVal.textContent = rgbGShift.value;
+        rgbBShiftVal.textContent = rgbBShift.value;
+      };
+      rgbRShift.addEventListener('input', updateRgbVals);
+      rgbGShift.addEventListener('input', updateRgbVals);
+      rgbBShift.addEventListener('input', updateRgbVals);
+      updateRgbVals();
+
+      function transformRgbSplit(imageData, shiftR, shiftG, shiftB) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const base = (y * width + x) * 4;
+
+            const offsetR = x + shiftR;
+            const offsetG = x + shiftG;
+            const offsetB = x + shiftB;
+
+            const sxR = (offsetR % width + width) % width;
+            const sxG = (offsetG % width + width) % width;
+            const sxB = (offsetB % width + width) % width;
+
+            const soR = (y * width + sxR) * 4;
+            const soG = (y * width + sxG) * 4;
+            const soB = (y * width + sxB) * 4;
+
+            out[base]   = data[soR];
+            out[base+1] = data[soG+1];
+            out[base+2] = data[soB+2];
+            out[base+3] = data[base+3]; // preserve alpha
+          }
         }
-        syncSliderDisplays();
-      });
 
-      // Randomize button
-      randomShiftBtn.addEventListener('click', () => {
-        const rand = () => Math.floor(Math.random() * 100) + 1;
-        if (linkShifts) {
-          const v = rand();
-          vShiftInput.value = v;
-          hShiftInput.value = v;
-        } else {
-          vShiftInput.value = rand();
-          hShiftInput.value = rand();
+        return new ImageData(out, width, height);
+      }
+
+      // --- Glitch: Tile Scramble -----------------------------------------
+      const tileSize = document.getElementById('tileSize');
+      const tileChaos = document.getElementById('tileChaos');
+      const tileSizeVal = document.getElementById('tileSizeVal');
+      const tileChaosVal = document.getElementById('tileChaosVal');
+      tileSize.addEventListener('input', () => tileSizeVal.textContent = tileSize.value);
+      tileChaos.addEventListener('input', () => tileChaosVal.textContent = tileChaos.value);
+      tileSizeVal.textContent = tileSize.value;
+      tileChaosVal.textContent = tileChaos.value;
+
+      function transformTileScramble(imageData, tileSizePx, chaosPercent) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const tile = tileSizePx;
+        const chaos = chaosPercent / 100;
+
+        const tilesX = Math.ceil(width / tile);
+        const tilesY = Math.ceil(height / tile);
+        const totalTiles = tilesX * tilesY;
+
+        const tileIndices = [];
+        for (let i = 0; i < totalTiles; i++) tileIndices.push(i);
+
+        // partial shuffle based on chaos
+        for (let i = 0; i < totalTiles; i++) {
+          if (Math.random() < chaos) {
+            const j = Math.floor(Math.random() * totalTiles);
+            const tmp = tileIndices[i];
+            tileIndices[i] = tileIndices[j];
+            tileIndices[j] = tmp;
+          }
         }
-        syncSliderDisplays();
-      });
 
-      updateLinkButton();
-      syncSliderDisplays();
+        for (let ty = 0; ty < tilesY; ty++) {
+          for (let tx = 0; tx < tilesX; tx++) {
+            const dstIndex = ty * tilesX + tx;
+            const srcIndex = tileIndices[dstIndex];
 
-      // Draw image from a data URL (file + restore)
+            const srcTx = srcIndex % tilesX;
+            const srcTy = Math.floor(srcIndex / tilesX);
+
+            const dstX0 = tx * tile;
+            const dstY0 = ty * tile;
+            const srcX0 = srcTx * tile;
+            const srcY0 = srcTy * tile;
+
+            for (let yy = 0; yy < tile; yy++) {
+              const sy = srcY0 + yy;
+              const dy = dstY0 + yy;
+              if (sy >= height || dy >= height) continue;
+              for (let xx = 0; xx < tile; xx++) {
+                const sx = srcX0 + xx;
+                const dx = dstX0 + xx;
+                if (sx >= width || dx >= width) continue;
+                const so = (sy * width + sx) * 4;
+                const dof = (dy * width + dx) * 4;
+                out[dof] = data[so];
+                out[dof+1] = data[so+1];
+                out[dof+2] = data[so+2];
+                out[dof+3] = data[so+3];
+              }
+            }
+          }
+        }
+
+        return new ImageData(out, width, height);
+      }
+
+      // --- Warping: Polar Swirl ------------------------------------------
+      const polarStrength = document.getElementById('polarStrength');
+      const polarRadius = document.getElementById('polarRadius');
+      const polarStrengthVal = document.getElementById('polarStrengthVal');
+      const polarRadiusVal = document.getElementById('polarRadiusVal');
+      polarStrength.addEventListener('input', () => polarStrengthVal.textContent = polarStrength.value);
+      polarRadius.addEventListener('input', () => polarRadiusVal.textContent = polarRadius.value);
+      polarStrengthVal.textContent = polarStrength.value;
+      polarRadiusVal.textContent = polarRadius.value;
+
+      function transformPolarSwirl(imageData, strength, radiusFactor) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const cx = width / 2;
+        const cy = height / 2;
+        const maxR = Math.min(width, height) * (radiusFactor / 200);
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const dx = x - cx;
+            const dy = y - cy;
+            const r = Math.sqrt(dx*dx + dy*dy);
+            let sx = x, sy = y;
+            if (r < maxR && r > 0) {
+              const angle = Math.atan2(dy, dx);
+              const t = (maxR - r) / maxR;
+              const twist = (strength * t) * (Math.PI / 180);
+              const newAngle = angle + twist;
+              sx = Math.round(cx + Math.cos(newAngle) * r);
+              sy = Math.round(cy + Math.sin(newAngle) * r);
+            }
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            const dof = (y * width + x) * 4;
+            out[dof] = data[so];
+            out[dof+1] = data[so+1];
+            out[dof+2] = data[so+2];
+            out[dof+3] = data[so+3];
+          }
+        }
+
+        return new ImageData(out, width, height);
+      }
+
+      // --- Warping: Flow Field -------------------------------------------
+      const flowScale = document.getElementById('flowScale');
+      const flowStrength = document.getElementById('flowStrength');
+      const flowScaleVal = document.getElementById('flowScaleVal');
+      const flowStrengthVal = document.getElementById('flowStrengthVal');
+      flowScale.addEventListener('input', () => flowScaleVal.textContent = flowScale.value);
+      flowStrength.addEventListener('input', () => flowStrengthVal.textContent = flowStrength.value);
+      flowScaleVal.textContent = flowScale.value;
+      flowStrengthVal.textContent = flowStrength.value;
+
+      function transformFlowField(imageData, scale, strength) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const s = strength;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const angle = noise2D(x, y, scale) * Math.PI * 4;
+            const dx = Math.cos(angle) * s;
+            const dy = Math.sin(angle) * s;
+            let sx = Math.round(x + dx);
+            let sy = Math.round(y + dy);
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            const dof = (y * width + x) * 4;
+            out[dof] = data[so];
+            out[dof+1] = data[so+1];
+            out[dof+2] = data[so+2];
+            out[dof+3] = data[so+3];
+          }
+        }
+
+        return new ImageData(out, width, height);
+      }
+
+      // --- Warping: Depth Warp -------------------------------------------
+      const depthStrength = document.getElementById('depthStrength');
+      const depthStrengthVal = document.getElementById('depthStrengthVal');
+      depthStrength.addEventListener('input', () => depthStrengthVal.textContent = depthStrength.value);
+      depthStrengthVal.textContent = depthStrength.value;
+
+      function transformDepthWarp(imageData, strength) {
+        const { data, width, height } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const cx = width / 2;
+        const cy = height / 2;
+        const s = strength;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const o = (y * width + x) * 4;
+            const r = data[o], g = data[o+1], b = data[o+2];
+            const { v } = rgbToHsv(r, g, b);
+            const depth = (v - 0.5) * 2;
+            const dx = x - cx;
+            const dy = y - cy;
+            let sx = Math.round(x + dx * depth * s / 100);
+            let sy = Math.round(y + dy * depth * s / 100);
+            sx = (sx % width + width) % width;
+            sy = (sy % height + height) % height;
+            const so = (sy * width + sx) * 4;
+            out[o] = data[so];
+            out[o+1] = data[so+1];
+            out[o+2] = data[so+2];
+            out[o+3] = data[so+3];
+          }
+        }
+
+        return new ImageData(out, width, height);
+      }
+
+      // --- Experimental: Fractal Warp (iterated sine warp) ----------------
+      const fractalIter = document.getElementById('fractalIter');
+      const fractalShift = document.getElementById('fractalShift');
+      const fractalIterVal = document.getElementById('fractalIterVal');
+      const fractalShiftVal = document.getElementById('fractalShiftVal');
+      fractalIter.addEventListener('input', () => fractalIterVal.textContent = fractalIter.value);
+      fractalShift.addEventListener('input', () => fractalShiftVal.textContent = fractalShift.value);
+      fractalIterVal.textContent = fractalIter.value;
+      fractalShiftVal.textContent = fractalShift.value;
+
+      function transformFractalWarp(imageData, iterations, shift) {
+        let current = imageData;
+        for (let i = 0; i < iterations; i++) {
+          const amp = shift * (1 + i * 0.5);
+          const period = 60 + i * 10;
+          current = transformSineWarp(current, amp, period);
+        }
+        return current;
+      }
+
+      // --- Experimental: Feedback Warp (iterated noise warp) -------------
+      const feedbackIter = document.getElementById('feedbackIter');
+      const feedbackStrength = document.getElementById('feedbackStrength');
+      const feedbackIterVal = document.getElementById('feedbackIterVal');
+      const feedbackStrengthVal = document.getElementById('feedbackStrengthVal');
+      feedbackIter.addEventListener('input', () => feedbackIterVal.textContent = feedbackIter.value);
+      feedbackStrength.addEventListener('input', () => feedbackStrengthVal.textContent = feedbackStrength.value);
+      feedbackIterVal.textContent = feedbackIter.value;
+      feedbackStrengthVal.textContent = feedbackStrength.value;
+
+      function transformFeedbackWarp(imageData, iterations, strength) {
+        let current = imageData;
+        for (let i = 0; i < iterations; i++) {
+          const scale = 40 + i * 10;
+          current = transformNoiseWarp(current, strength, scale);
+        }
+        return current;
+      }
+
+      // --- Category / effect mapping & UI --------------------------------
+      const effectOptionsByCategory = {
+        classic: [
+          { value: 'classic:sand', label: 'Sand Layout' },
+          { value: 'classic:gridShift', label: 'Grid Shift' },
+        ],
+        distortion: [
+          { value: 'distortion:sine', label: 'Sine Warp' },
+          { value: 'distortion:noise', label: 'Noise Warp' },
+          { value: 'distortion:offsetMap', label: 'Offset Map' },
+        ],
+        glitch: [
+          { value: 'glitch:rgbSplit', label: 'RGB Split' },
+          { value: 'glitch:tileScramble', label: 'Tile Scramble' },
+        ],
+        warping: [
+          { value: 'warping:polar', label: 'Polar Swirl' },
+          { value: 'warping:flow', label: 'Flow Field' },
+          { value: 'warping:depth', label: 'Depth Warp' },
+        ],
+        experimental: [
+          { value: 'experimental:fractal', label: 'Fractal Warp' },
+          { value: 'experimental:feedback', label: 'Feedback Warp' },
+        ]
+      };
+
+      function refreshEffectOptions() {
+        const cat = categorySelect.value;
+        const options = effectOptionsByCategory[cat];
+        effectSelect.innerHTML = '';
+        options.forEach(opt => {
+          const optionEl = document.createElement('option');
+          optionEl.value = opt.value;
+          optionEl.textContent = opt.label;
+          effectSelect.appendChild(optionEl);
+        });
+        // show matching param panel
+        updateParamPanels();
+      }
+
+      function updateParamPanels() {
+        const effectKey = effectSelect.value;
+        paramPanels.forEach(panel => {
+          panel.classList.toggle('active', panel.getAttribute('data-effect') === effectKey);
+        });
+        setStatus(`Effect: ${effectSelect.selectedOptions[0]?.textContent || ''}`);
+      }
+
+      categorySelect.addEventListener('change', refreshEffectOptions);
+      effectSelect.addEventListener('change', updateParamPanels);
+
+      // initialize
+      refreshEffectOptions();
+
+      // --- Drawing & persistence -----------------------------------------
       function drawImageFromSrc(src) {
         const img = new Image();
         img.onload = () => {
-          const maxSide = 800;
+          const maxSide = 900;
           let { width, height } = img;
-
           if (width > maxSide || height > maxSide) {
             const scale = Math.min(maxSide / width, maxSide / height);
             width = Math.round(width * scale);
             height = Math.round(height * scale);
           }
-
-          originalCanvas.width  = width;
+          originalCanvas.width = width;
           originalCanvas.height = height;
-          outputCanvas.width    = width;
-          outputCanvas.height   = height;
+          outputCanvas.width = width;
+          outputCanvas.height = height;
 
           originalCtx.clearRect(0, 0, width, height);
           outputCtx.clearRect(0, 0, width, height);
-
           originalCtx.drawImage(img, 0, 0, width, height);
           lastImageData = originalCtx.getImageData(0, 0, width, height);
-
           imageLoaded = true;
           downloadBtn.disabled = true;
-          setStatus('Image ready. Choose mode and parameters, then click "Apply".');
+          setStatus('Image ready. Choose category + effect, then click "Apply".');
         };
         img.src = src;
       }
 
-      // Restore last image from localStorage
       const savedUrl = localStorage.getItem(STORAGE_KEY);
       if (savedUrl) {
         try {
           drawImageFromSrc(savedUrl);
           setStatus('Restored last image from previous session.');
-        } catch (e) {
-          console.warn('Could not restore saved image:', e);
+        } catch {
           setStatus('Load an image to get started.');
         }
       } else {
         setStatus('Load an image to get started.');
       }
 
-      // Image loading from file input
-      fileInput.addEventListener('change', (event) => {
-        const file = event.target.files[0];
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
         if (!file) return;
-
         const reader = new FileReader();
-
-        reader.onload = (e) => {
-          const dataUrl = e.target.result;
+        reader.onload = (ev) => {
+          const dataUrl = ev.target.result;
           try {
             localStorage.setItem(STORAGE_KEY, dataUrl);
-          } catch (err) {
-            console.warn('Could not store image in localStorage (maybe too large):', err);
-          }
+          } catch {}
           drawImageFromSrc(dataUrl);
         };
-
-        reader.onerror = () => {
-          setStatus('Error loading image. Please try another file.');
-        };
-
+        reader.onerror = () => setStatus('Error loading image.');
         reader.readAsDataURL(file);
         setStatus('Reading image...');
       });
 
-      // Apply button
+      // --- Apply button ---------------------------------------------------
       applyBtn.addEventListener('click', () => {
         if (!imageLoaded || !lastImageData) {
           alert('Please load an image first.');
           return;
         }
-
-        const mode = modeSelect.value;
+        const effectKey = effectSelect.value;
         setStatus('Processing...');
 
         setTimeout(() => {
           try {
-            let result;
-            if (mode === 'sand') {
-              const moundCount = parseInt(moundsSelect.value, 10) || 2;
-              result = transformToSandLayout(lastImageData, moundCount);
-            } else {
-              const vShift = Math.max(1, parseInt(vShiftInput.value, 10) || 1);
-              const hShift = Math.max(1, parseInt(hShiftInput.value, 10) || 1);
-              result = transformGridShift(lastImageData, vShift, hShift);
+            let result = null;
+            const imgDataCopy = new ImageData(
+              new Uint8ClampedArray(lastImageData.data),
+              lastImageData.width,
+              lastImageData.height
+            );
+
+            switch (effectKey) {
+              case 'classic:sand':
+                result = transformSandLayout(imgDataCopy, parseInt(sandMoundsSelect.value, 10) || 2);
+                break;
+              case 'classic:gridShift':
+                result = transformGridShift(
+                  imgDataCopy,
+                  parseInt(gridVShift.value, 10) || 1,
+                  parseInt(gridHShift.value, 10) || 1
+                );
+                break;
+              case 'distortion:sine':
+                result = transformSineWarp(
+                  imgDataCopy,
+                  parseInt(sineAmp.value, 10) || 1,
+                  parseInt(sineFreq.value, 10) || 10
+                );
+                break;
+              case 'distortion:noise':
+                result = transformNoiseWarp(
+                  imgDataCopy,
+                  parseInt(noiseStrength.value, 10) || 1,
+                  parseInt(noiseScale.value, 10) || 10
+                );
+                break;
+              case 'distortion:offsetMap':
+                result = transformOffsetMap(
+                  imgDataCopy,
+                  offsetSource.value,
+                  offsetDirection.value,
+                  parseInt(offsetStrength.value, 10) || 1
+                );
+                break;
+              case 'glitch:rgbSplit':
+                result = transformRgbSplit(
+                  imgDataCopy,
+                  parseInt(rgbRShift.value, 10) || 0,
+                  parseInt(rgbGShift.value, 10) || 0,
+                  parseInt(rgbBShift.value, 10) || 0
+                );
+                break;
+              case 'glitch:tileScramble':
+                result = transformTileScramble(
+                  imgDataCopy,
+                  parseInt(tileSize.value, 10) || 8,
+                  parseInt(tileChaos.value, 10) || 50
+                );
+                break;
+              case 'warping:polar':
+                result = transformPolarSwirl(
+                  imgDataCopy,
+                  parseInt(polarStrength.value, 10) || 0,
+                  parseInt(polarRadius.value, 10) || 100
+                );
+                break;
+              case 'warping:flow':
+                result = transformFlowField(
+                  imgDataCopy,
+                  parseInt(flowScale.value, 10) || 50,
+                  parseInt(flowStrength.value, 10) || 10
+                );
+                break;
+              case 'warping:depth':
+                result = transformDepthWarp(
+                  imgDataCopy,
+                  parseInt(depthStrength.value, 10) || 10
+                );
+                break;
+              case 'experimental:fractal':
+                result = transformFractalWarp(
+                  imgDataCopy,
+                  parseInt(fractalIter.value, 10) || 1,
+                  parseInt(fractalShift.value, 10) || 5
+                );
+                break;
+              case 'experimental:feedback':
+                result = transformFeedbackWarp(
+                  imgDataCopy,
+                  parseInt(feedbackIter.value, 10) || 1,
+                  parseInt(feedbackStrength.value, 10) || 5
+                );
+                break;
+              default:
+                result = imgDataCopy;
             }
 
             outputCtx.putImageData(result, 0, 0);
@@ -631,7 +1249,7 @@ Changelog:
         }, 30);
       });
 
-      // Download button
+      // --- Download -------------------------------------------------------
       downloadBtn.addEventListener('click', () => {
         const link = document.createElement('a');
         link.download = 'pixel-shuffler-output.png';
