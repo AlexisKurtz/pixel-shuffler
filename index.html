@@ -1,27 +1,31 @@
 <!--
-Pixel Shuffler - Sand Layers + Vertical/Horizontal Shift
-Version: 0.11.0
+Pixel Shuffler - Sand Layers + Combined Grid Shift
+Version: 0.12.0
 
 Changelog:
+- 0.12.0
+  - Replaced separate Vertical/Horizontal modes with a single "Grid Shift" mode
+    that combines both vertical and horizontal block-based displacements:
+      * Vertical: columns are grouped in blocks of size V pixels (user-defined).
+        For each block:
+          - First block: shift its columns UP by V pixels (wrap).
+          - Next block: shift its columns DOWN by V pixels.
+          - Alternating across the width.
+      * Horizontal: rows are grouped in blocks of size H pixels (user-defined).
+        For each block:
+          - First block: shift its rows LEFT by H pixels (wrap).
+          - Next block: shift its rows RIGHT by H pixels.
+          - Alternating down the height.
+      * Both axes are applied in one mode: Grid Shift.
+      * Pure pixel rearrangement: no pixels created or removed.
+  - Added two separate selectors: Vertical shift (px) and Horizontal shift (px),
+    plus a chain toggle to link/unlink their values:
+      * When linked, changing one updates the other.
+      * When unlinked, they can be set independently.
 - 0.11.0
-  - Added "Horizontal Shift" mode:
-      * Operates on rows instead of columns.
-      * Rows are grouped in vertical blocks of size X pixels (user-defined).
-      * For each block:
-          - First block: shift its rows LEFT by X pixels (with horizontal wrap).
-          - Next block: shift its rows RIGHT by X pixels.
-          - Alternating left/right down the image.
-      * Pure pixel rearrangement, no creation/removal.
-  - Persist last loaded image using localStorage:
-      * The last image (as a data URL) is stored on load.
-      * On page refresh/reopen, the app restores and redraws that image
-        automatically (if still available in localStorage).
-- 0.10.2
-  - Wrapped JS in window.onload, fixed Apply wiring robustness.
-- 0.10.0–0.10.1
-  - Added Vertical Shift mode and basic mode switching.
-- 0.9.x
-  - Sand Layout mode with brightness-based mound layout (true pixel shuffling).
+  - Added persistence of last loaded image with localStorage.
+- 0.10.x / 0.9.x
+  - Sand Layout mode: brightness-based mound layout with true pixel shuffling.
 -->
 
 <!DOCTYPE html>
@@ -103,6 +107,11 @@ Changelog:
       width: 70px;
     }
 
+    #linkShiftsBtn {
+      padding: 6px 10px;
+      font-size: 0.85rem;
+    }
+
     .canvases {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -165,8 +174,7 @@ Changelog:
         Mode:
         <select id="modeSelect">
           <option value="sand">Sand Layout</option>
-          <option value="verticalShift">Vertical Shift</option>
-          <option value="horizontalShift">Horizontal Shift</option>
+          <option value="gridShift">Grid Shift</option>
         </select>
       </label>
 
@@ -182,10 +190,19 @@ Changelog:
         </select>
       </label>
 
-      <label id="shiftLabel" style="display:none;">
-        Shift size (px):
-        <input type="number" id="shiftSizeInput" min="1" max="500" value="20" />
+      <label id="vShiftLabel" style="display:none;">
+        Vertical shift (px):
+        <input type="number" id="vShiftInput" min="0" max="500" value="20" />
       </label>
+
+      <label id="hShiftLabel" style="display:none;">
+        Horizontal shift (px):
+        <input type="number" id="hShiftInput" min="0" max="500" value="20" />
+      </label>
+
+      <button id="linkShiftsBtn" type="button" style="display:none;" aria-pressed="true" title="Link/unlink vertical and horizontal shift values">
+        🔗 Linked
+      </button>
 
       <button id="applyBtn">Apply</button>
       <button id="downloadBtn" disabled>Download Result</button>
@@ -212,7 +229,7 @@ Changelog:
 
   <script>
     window.onload = function () {
-      const APP_VERSION = '0.11.0';
+      const APP_VERSION = '0.12.0';
       const STORAGE_KEY = 'pixelShuffler_lastImageDataUrl_v1';
 
       const vInline = document.querySelector('.js-version-inline');
@@ -224,8 +241,11 @@ Changelog:
       const modeSelect     = document.getElementById('modeSelect');
       const moundsLabel    = document.getElementById('moundsLabel');
       const moundsSelect   = document.getElementById('moundsSelect');
-      const shiftLabel     = document.getElementById('shiftLabel');
-      const shiftSizeInput = document.getElementById('shiftSizeInput');
+      const vShiftLabel    = document.getElementById('vShiftLabel');
+      const hShiftLabel    = document.getElementById('hShiftLabel');
+      const vShiftInput    = document.getElementById('vShiftInput');
+      const hShiftInput    = document.getElementById('hShiftInput');
+      const linkShiftsBtn  = document.getElementById('linkShiftsBtn');
       const applyBtn       = document.getElementById('applyBtn');
       const downloadBtn    = document.getElementById('downloadBtn');
       const statusText     = document.getElementById('statusText');
@@ -237,9 +257,15 @@ Changelog:
 
       let imageLoaded = false;
       let lastImageData = null;
+      let linkShifts = true;
 
       function setStatus(msg) {
         statusText.textContent = msg || '';
+      }
+
+      function updateLinkButton() {
+        linkShiftsBtn.setAttribute('aria-pressed', linkShifts ? 'true' : 'false');
+        linkShiftsBtn.textContent = linkShifts ? '🔗 Linked' : '⛓ Unlinked';
       }
 
       // RGB -> HSV helper
@@ -324,6 +350,7 @@ Changelog:
           pixels[i] = { r, g, b, a, v };
         }
 
+        // brightness-only sort: dark -> light
         pixels.sort((p1, p2) => p1.v - p2.v);
 
         const profile = generateMoundProfile(width, moundCount);
@@ -375,79 +402,108 @@ Changelog:
         return new ImageData(outData, width, height);
       }
 
-      // Vertical Shift transform
-      function transformVerticalShift(imageData, shiftSize) {
-        const { data, width, height } = imageData;
-        const outData = new Uint8ClampedArray(data.length);
+      // Combined Grid Shift transform (vertical + horizontal)
+      function transformGridShift(imageData, vShiftSize, hShiftSize) {
+        const { width, height } = imageData;
+        let currentData = imageData.data;
+        let working = currentData;
 
-        const step = Math.max(1, Math.floor(shiftSize));
-        const effectiveShift = step % height;
-
-        for (let x = 0; x < width; x++) {
-          const blockIndex = Math.floor(x / step);
-          const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
-
-          for (let y = 0; y < height; y++) {
-            const srcY = (y - direction + height) % height;
-            const srcOffset = (srcY * width + x) * 4;
-            const dstOffset = (y * width + x) * 4;
-
-            outData[dstOffset]     = data[srcOffset];
-            outData[dstOffset + 1] = data[srcOffset + 1];
-            outData[dstOffset + 2] = data[srcOffset + 2];
-            outData[dstOffset + 3] = data[srcOffset + 3];
-          }
-        }
-
-        return new ImageData(outData, width, height);
-      }
-
-      // Horizontal Shift transform
-      function transformHorizontalShift(imageData, shiftSize) {
-        const { data, width, height } = imageData;
-        const outData = new Uint8ClampedArray(data.length);
-
-        const step = Math.max(1, Math.floor(shiftSize));
-        const effectiveShift = step % width;
-
-        for (let y = 0; y < height; y++) {
-          const blockIndex = Math.floor(y / step);
-          const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
+        // Vertical component (columns in horizontal blocks)
+        const vStep = Math.max(0, Math.floor(vShiftSize));
+        if (vStep > 0) {
+          const effectiveVShift = vStep % height;
+          const vOut = new Uint8ClampedArray(currentData.length);
 
           for (let x = 0; x < width; x++) {
-            const srcX = (x - direction + width) % width;
-            const srcOffset = (y * width + srcX) * 4;
-            const dstOffset = (y * width + x) * 4;
+            const blockIndex = Math.floor(x / vStep);
+            const direction = (blockIndex % 2 === 0) ? -effectiveVShift : effectiveVShift;
 
-            outData[dstOffset]     = data[srcOffset];
-            outData[dstOffset + 1] = data[srcOffset + 1];
-            outData[dstOffset + 2] = data[srcOffset + 2];
-            outData[dstOffset + 3] = data[srcOffset + 3];
+            for (let y = 0; y < height; y++) {
+              const srcY = (y - direction + height) % height;
+              const srcOffset = (srcY * width + x) * 4;
+              const dstOffset = (y * width + x) * 4;
+
+              vOut[dstOffset]     = working[srcOffset];
+              vOut[dstOffset + 1] = working[srcOffset + 1];
+              vOut[dstOffset + 2] = working[srcOffset + 2];
+              vOut[dstOffset + 3] = working[srcOffset + 3];
+            }
           }
+
+          working = vOut;
         }
 
-        return new ImageData(outData, width, height);
+        // Horizontal component (rows in vertical blocks)
+        const hStep = Math.max(0, Math.floor(hShiftSize));
+        if (hStep > 0) {
+          const effectiveHShift = hStep % width;
+          const hOut = new Uint8ClampedArray(working.length);
+
+          for (let y = 0; y < height; y++) {
+            const blockIndex = Math.floor(y / hStep);
+            const direction = (blockIndex % 2 === 0) ? -effectiveHShift : effectiveHShift;
+
+            for (let x = 0; x < width; x++) {
+              const srcX = (x - direction + width) % width;
+              const srcOffset = (y * width + srcX) * 4;
+              const dstOffset = (y * width + x) * 4;
+
+              hOut[dstOffset]     = working[srcOffset];
+              hOut[dstOffset + 1] = working[srcOffset + 1];
+              hOut[dstOffset + 2] = working[srcOffset + 2];
+              hOut[dstOffset + 3] = working[srcOffset + 3];
+            }
+          }
+
+          working = hOut;
+        }
+
+        return new ImageData(working, width, height);
       }
 
       // Mode UI toggle
       modeSelect.addEventListener('change', () => {
         const mode = modeSelect.value;
         if (mode === 'sand') {
-          moundsLabel.style.display = '';
-          shiftLabel.style.display = 'none';
+          moundsLabel.style.display   = '';
+          vShiftLabel.style.display   = 'none';
+          hShiftLabel.style.display   = 'none';
+          linkShiftsBtn.style.display = 'none';
           setStatus('Sand Layout mode: pixels reordered into mound-shaped layers.');
         } else {
-          moundsLabel.style.display = 'none';
-          shiftLabel.style.display = '';
-          if (mode === 'verticalShift') {
-            setStatus('Vertical Shift mode: column blocks shift up/down.');
-          } else {
-            setStatus('Horizontal Shift mode: row blocks shift left/right.');
-          }
+          moundsLabel.style.display   = 'none';
+          vShiftLabel.style.display   = '';
+          hShiftLabel.style.display   = '';
+          linkShiftsBtn.style.display = '';
+          setStatus('Grid Shift mode: combined vertical and horizontal block displacements.');
         }
       });
 
-      // Draw image (shared for load + restore)
+      // Link/unlink shift values
+      linkShiftsBtn.addEventListener('click', () => {
+        linkShifts = !linkShifts;
+        if (linkShifts) {
+          // When re-linking, sync horizontal to vertical by default
+          hShiftInput.value = vShiftInput.value;
+        }
+        updateLinkButton();
+      });
+
+      vShiftInput.addEventListener('input', () => {
+        if (linkShifts) {
+          hShiftInput.value = vShiftInput.value;
+        }
+      });
+
+      hShiftInput.addEventListener('input', () => {
+        if (linkShifts) {
+          vShiftInput.value = hShiftInput.value;
+        }
+      });
+
+      updateLinkButton();
+
+      // Draw image from a data URL (used for file + restore)
       function drawImageFromSrc(src) {
         const img = new Image();
         img.onload = () => {
@@ -478,7 +534,7 @@ Changelog:
         img.src = src;
       }
 
-      // Restore last image from localStorage (if available)
+      // Restore last image from localStorage
       const savedUrl = localStorage.getItem(STORAGE_KEY);
       if (savedUrl) {
         try {
@@ -533,12 +589,10 @@ Changelog:
             if (mode === 'sand') {
               const moundCount = parseInt(moundsSelect.value, 10) || 2;
               result = transformToSandLayout(lastImageData, moundCount);
-            } else if (mode === 'verticalShift') {
-              const shiftSize = parseInt(shiftSizeInput.value, 10) || 1;
-              result = transformVerticalShift(lastImageData, shiftSize);
             } else {
-              const shiftSize = parseInt(shiftSizeInput.value, 10) || 1;
-              result = transformHorizontalShift(lastImageData, shiftSize);
+              const vShift = Math.max(0, parseInt(vShiftInput.value, 10) || 0);
+              const hShift = Math.max(0, parseInt(hShiftInput.value, 10) || 0);
+              result = transformGridShift(lastImageData, vShift, hShift);
             }
 
             outputCtx.putImageData(result, 0, 0);
