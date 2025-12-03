@@ -1,22 +1,16 @@
 <!--
 Pixel Shuffler - Sand Layers + Vertical Shift
-Version: 0.10.1
+Version: 0.10.2
 
 Changelog:
-- 0.10.1
-  - Removed reliance on the Apply button being disabled/enabled.
-    Apply is now always clickable; we guard with a runtime check to ensure
-    an image is loaded before processing. This avoids cases where the button
-    could remain greyed out due to script or load issues.
-- 0.10.0
-  - Added "Vertical Shift" mode:
-      * Columns processed in horizontal blocks of size X (user-defined).
-      * Blocks alternate: UP by X, DOWN by X (vertical wrap).
-      * Pure pixel rearrangement, no creation/removal.
-- 0.9.1
-  - Brightness-only sorting in Sand Layout mode.
-- 0.9.0
-  - Mound-shaped layout for Sand Layout mode.
+- 0.10.2
+  - Wrapped all JS inside window.onload to avoid any DOM loading issues that
+    could prevent event listeners from being attached (Apply doing nothing).
+  - Simplified button state logic: Apply is always clickable; only Download
+    toggles disabled after processing.
+  - Kept:
+      * Sand Layout mode (brightness-based mound layout, true pixel shuffling).
+      * Vertical Shift mode (column blocks shifted up/down by X pixels, wrapping).
 -->
 
 <!DOCTYPE html>
@@ -205,3 +199,299 @@ Changelog:
   </div>
 
   <script>
+    window.onload = function () {
+      // ---- Version -------------------------------------------------------
+      const APP_VERSION = '0.10.2';
+      const vInline = document.querySelector('.js-version-inline');
+      const vFooter = document.querySelector('.js-version-footer');
+      if (vInline) vInline.textContent = `· v${APP_VERSION}`;
+      if (vFooter) vFooter.textContent = APP_VERSION;
+
+      // ---- DOM elements --------------------------------------------------
+      const fileInput      = document.getElementById('fileInput');
+      const modeSelect     = document.getElementById('modeSelect');
+      const moundsLabel    = document.getElementById('moundsLabel');
+      const moundsSelect   = document.getElementById('moundsSelect');
+      const shiftLabel     = document.getElementById('shiftLabel');
+      const shiftSizeInput = document.getElementById('shiftSizeInput');
+      const applyBtn       = document.getElementById('applyBtn');
+      const downloadBtn    = document.getElementById('downloadBtn');
+      const statusText     = document.getElementById('statusText');
+
+      const originalCanvas = document.getElementById('originalCanvas');
+      const outputCanvas   = document.getElementById('outputCanvas');
+      const originalCtx    = originalCanvas.getContext('2d');
+      const outputCtx      = outputCanvas.getContext('2d');
+
+      let imageLoaded = false;
+      let lastImageData = null;
+
+      function setStatus(msg) {
+        statusText.textContent = msg || '';
+      }
+
+      // RGB -> HSV helper (h: 0–360, s: 0–1, v: 0–1)
+      function rgbToHsv(r, g, b) {
+        r /= 255;
+        g /= 255;
+        b /= 255;
+
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const d   = max - min;
+
+        let h = 0;
+        const v = max;
+        const s = max === 0 ? 0 : d / max;
+
+        if (d !== 0) {
+          if (max === r) {
+            h = ((g - b) / d) % 6;
+          } else if (max === g) {
+            h = (b - r) / d + 2;
+          } else {
+            h = (r - g) / d + 4;
+          }
+          h *= 60;
+          if (h < 0) h += 360;
+        }
+
+        return { h, s, v };
+      }
+
+      // Generate a normalized mound profile: for each x, a value in [0, 1]
+      function generateMoundProfile(width, moundCount) {
+        const m = Math.max(1, Math.min(6, moundCount));
+        const centers = [];
+        const amplitudes = [];
+        const sigmas = [];
+
+        for (let i = 0; i < m; i++) {
+          const centerX = (i + 0.5) * (width / m);
+          centers.push(centerX);
+        }
+
+        for (let i = 0; i < m; i++) {
+          const amp = 0.6 + Math.random() * 0.3;  // normalized height in [0.6, 0.9]
+          amplitudes.push(amp);
+          const sigma = width / (m * 2.5);
+          sigmas.push(sigma);
+        }
+
+        const profile = new Float32Array(width);
+
+        for (let x = 0; x < width; x++) {
+          let hNorm = 0;
+          for (let i = 0; i < m; i++) {
+            const dx = x - centers[i];
+            const s = sigmas[i];
+            const gauss = amplitudes[i] * Math.exp(-0.5 * (dx * dx) / (s * s));
+            if (gauss > hNorm) hNorm = gauss;
+          }
+          if (hNorm > 1) hNorm = 1;
+          profile[x] = hNorm;
+        }
+
+        return profile;
+      }
+
+      // ---- Sand Layout transform ----------------------------------------
+      function transformToSandLayout(imageData, moundCount) {
+        const { data, width, height } = imageData;
+        const numPixels = width * height;
+
+        const pixels = new Array(numPixels);
+        for (let i = 0; i < numPixels; i++) {
+          const offset = i * 4;
+          const r = data[offset];
+          const g = data[offset + 1];
+          const b = data[offset + 2];
+          const a = data[offset + 3];
+
+          const { v } = rgbToHsv(r, g, b);
+          pixels[i] = { r, g, b, a, v };
+        }
+
+        // brightness-only sort: dark -> light
+        pixels.sort((p1, p2) => p1.v - p2.v);
+
+        const profile = generateMoundProfile(width, moundCount);
+
+        const coords = new Array(numPixels);
+        const insideWeight = 0.88;
+
+        for (let y = 0; y < height; y++) {
+          const yFromBottom = (height - 1) - y;
+          for (let x = 0; x < width; x++) {
+            const idx = y * width + x;
+            const hNorm = profile[x];
+            const moundHeight = hNorm * (height - 1);
+            let t;
+
+            if (moundHeight > 1 && yFromBottom <= moundHeight) {
+              const tInside = moundHeight <= 0 ? 0 : (yFromBottom / moundHeight);
+              t = tInside * insideWeight;
+            } else {
+              const remainingHeight = (height - 1) - moundHeight;
+              if (remainingHeight <= 0) {
+                t = insideWeight;
+              } else {
+                const yAbove = yFromBottom - moundHeight;
+                const tOutside = Math.max(0, Math.min(1, yAbove / remainingHeight));
+                t = insideWeight + tOutside * (1 - insideWeight);
+              }
+            }
+
+            coords[idx] = { x, y, t };
+          }
+        }
+
+        coords.sort((c1, c2) => c1.t - c2.t);
+
+        const outData = new Uint8ClampedArray(data.length);
+
+        for (let i = 0; i < numPixels; i++) {
+          const { x, y } = coords[i];
+          const p = pixels[i];
+          const offset = (y * width + x) * 4;
+
+          outData[offset]     = p.r;
+          outData[offset + 1] = p.g;
+          outData[offset + 2] = p.b;
+          outData[offset + 3] = p.a;
+        }
+
+        return new ImageData(outData, width, height);
+      }
+
+      // ---- Vertical Shift transform -------------------------------------
+      function transformVerticalShift(imageData, shiftSize) {
+        const { data, width, height } = imageData;
+        const outData = new Uint8ClampedArray(data.length);
+
+        const step = Math.max(1, Math.floor(shiftSize));
+        const effectiveShift = step % height; // avoid full rotations
+
+        for (let x = 0; x < width; x++) {
+          const blockIndex = Math.floor(x / step);
+          const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
+
+          for (let y = 0; y < height; y++) {
+            const srcY = (y - direction + height) % height;
+            const srcOffset = (srcY * width + x) * 4;
+            const dstOffset = (y * width + x) * 4;
+
+            outData[dstOffset]     = data[srcOffset];
+            outData[dstOffset + 1] = data[srcOffset + 1];
+            outData[dstOffset + 2] = data[srcOffset + 2];
+            outData[dstOffset + 3] = data[srcOffset + 3];
+          }
+        }
+
+        return new ImageData(outData, width, height);
+      }
+
+      // ---- Mode UI toggle -----------------------------------------------
+      modeSelect.addEventListener('change', () => {
+        const mode = modeSelect.value;
+        if (mode === 'sand') {
+          moundsLabel.style.display = '';
+          shiftLabel.style.display = 'none';
+          setStatus('Sand Layout mode: pixels reordered into mound-shaped layers.');
+        } else {
+          moundsLabel.style.display = 'none';
+          shiftLabel.style.display = '';
+          setStatus('Vertical Shift mode: columns shift up/down in blocks.');
+        }
+      });
+
+      // ---- Image loading -------------------------------------------------
+      fileInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxSide = 800;
+            let { width, height } = img;
+
+            if (width > maxSide || height > maxSide) {
+              const scale = Math.min(maxSide / width, maxSide / height);
+              width = Math.round(width * scale);
+              height = Math.round(height * scale);
+            }
+
+            originalCanvas.width  = width;
+            originalCanvas.height = height;
+            outputCanvas.width    = width;
+            outputCanvas.height   = height;
+
+            originalCtx.clearRect(0, 0, width, height);
+            outputCtx.clearRect(0, 0, width, height);
+
+            originalCtx.drawImage(img, 0, 0, width, height);
+            lastImageData = originalCtx.getImageData(0, 0, width, height);
+
+            imageLoaded = true;
+            downloadBtn.disabled = true;
+            setStatus('Image loaded. Choose mode and parameters, then click "Apply".');
+          };
+          img.src = e.target.result;
+        };
+
+        reader.onerror = () => {
+          setStatus('Error loading image. Please try another file.');
+        };
+
+        reader.readAsDataURL(file);
+        setStatus('Reading image...');
+      });
+
+      // ---- Apply button --------------------------------------------------
+      applyBtn.addEventListener('click', () => {
+        if (!imageLoaded || !lastImageData) {
+          alert('Please load an image first.');
+          return;
+        }
+
+        const mode = modeSelect.value;
+        setStatus('Processing...');
+
+        setTimeout(() => {
+          try {
+            let result;
+            if (mode === 'sand') {
+              const moundCount = parseInt(moundsSelect.value, 10) || 2;
+              result = transformToSandLayout(lastImageData, moundCount);
+            } else {
+              const shiftSize = parseInt(shiftSizeInput.value, 10) || 1;
+              result = transformVerticalShift(lastImageData, shiftSize);
+            }
+
+            outputCtx.putImageData(result, 0, 0);
+            downloadBtn.disabled = false;
+            setStatus('Done. You can download the result.');
+          } catch (err) {
+            console.error(err);
+            setStatus('Error during processing.');
+          }
+        }, 30);
+      });
+
+      // ---- Download button ----------------------------------------------
+      downloadBtn.addEventListener('click', () => {
+        const link = document.createElement('a');
+        link.download = 'pixel-shuffler-output.png';
+        link.href = outputCanvas.toDataURL('image/png');
+        link.click();
+      });
+
+      // Initial status
+      setStatus('Load an image to get started.');
+    };
+  </script>
+</body>
+</html>
