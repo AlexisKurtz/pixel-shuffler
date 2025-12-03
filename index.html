@@ -1,16 +1,27 @@
 <!--
-Pixel Shuffler - Sand Layers + Vertical Shift
-Version: 0.10.2
+Pixel Shuffler - Sand Layers + Vertical/Horizontal Shift
+Version: 0.11.0
 
 Changelog:
+- 0.11.0
+  - Added "Horizontal Shift" mode:
+      * Operates on rows instead of columns.
+      * Rows are grouped in vertical blocks of size X pixels (user-defined).
+      * For each block:
+          - First block: shift its rows LEFT by X pixels (with horizontal wrap).
+          - Next block: shift its rows RIGHT by X pixels.
+          - Alternating left/right down the image.
+      * Pure pixel rearrangement, no creation/removal.
+  - Persist last loaded image using localStorage:
+      * The last image (as a data URL) is stored on load.
+      * On page refresh/reopen, the app restores and redraws that image
+        automatically (if still available in localStorage).
 - 0.10.2
-  - Wrapped all JS inside window.onload to avoid any DOM loading issues that
-    could prevent event listeners from being attached (Apply doing nothing).
-  - Simplified button state logic: Apply is always clickable; only Download
-    toggles disabled after processing.
-  - Kept:
-      * Sand Layout mode (brightness-based mound layout, true pixel shuffling).
-      * Vertical Shift mode (column blocks shifted up/down by X pixels, wrapping).
+  - Wrapped JS in window.onload, fixed Apply wiring robustness.
+- 0.10.0–0.10.1
+  - Added Vertical Shift mode and basic mode switching.
+- 0.9.x
+  - Sand Layout mode with brightness-based mound layout (true pixel shuffling).
 -->
 
 <!DOCTYPE html>
@@ -155,6 +166,7 @@ Changelog:
         <select id="modeSelect">
           <option value="sand">Sand Layout</option>
           <option value="verticalShift">Vertical Shift</option>
+          <option value="horizontalShift">Horizontal Shift</option>
         </select>
       </label>
 
@@ -200,14 +212,14 @@ Changelog:
 
   <script>
     window.onload = function () {
-      // ---- Version -------------------------------------------------------
-      const APP_VERSION = '0.10.2';
+      const APP_VERSION = '0.11.0';
+      const STORAGE_KEY = 'pixelShuffler_lastImageDataUrl_v1';
+
       const vInline = document.querySelector('.js-version-inline');
       const vFooter = document.querySelector('.js-version-footer');
       if (vInline) vInline.textContent = `· v${APP_VERSION}`;
       if (vFooter) vFooter.textContent = APP_VERSION;
 
-      // ---- DOM elements --------------------------------------------------
       const fileInput      = document.getElementById('fileInput');
       const modeSelect     = document.getElementById('modeSelect');
       const moundsLabel    = document.getElementById('moundsLabel');
@@ -230,7 +242,7 @@ Changelog:
         statusText.textContent = msg || '';
       }
 
-      // RGB -> HSV helper (h: 0–360, s: 0–1, v: 0–1)
+      // RGB -> HSV helper
       function rgbToHsv(r, g, b) {
         r /= 255;
         g /= 255;
@@ -259,7 +271,7 @@ Changelog:
         return { h, s, v };
       }
 
-      // Generate a normalized mound profile: for each x, a value in [0, 1]
+      // Mound profile for Sand Layout
       function generateMoundProfile(width, moundCount) {
         const m = Math.max(1, Math.min(6, moundCount));
         const centers = [];
@@ -272,7 +284,7 @@ Changelog:
         }
 
         for (let i = 0; i < m; i++) {
-          const amp = 0.6 + Math.random() * 0.3;  // normalized height in [0.6, 0.9]
+          const amp = 0.6 + Math.random() * 0.3;
           amplitudes.push(amp);
           const sigma = width / (m * 2.5);
           sigmas.push(sigma);
@@ -295,7 +307,7 @@ Changelog:
         return profile;
       }
 
-      // ---- Sand Layout transform ----------------------------------------
+      // Sand Layout transform
       function transformToSandLayout(imageData, moundCount) {
         const { data, width, height } = imageData;
         const numPixels = width * height;
@@ -312,7 +324,6 @@ Changelog:
           pixels[i] = { r, g, b, a, v };
         }
 
-        // brightness-only sort: dark -> light
         pixels.sort((p1, p2) => p1.v - p2.v);
 
         const profile = generateMoundProfile(width, moundCount);
@@ -364,13 +375,13 @@ Changelog:
         return new ImageData(outData, width, height);
       }
 
-      // ---- Vertical Shift transform -------------------------------------
+      // Vertical Shift transform
       function transformVerticalShift(imageData, shiftSize) {
         const { data, width, height } = imageData;
         const outData = new Uint8ClampedArray(data.length);
 
         const step = Math.max(1, Math.floor(shiftSize));
-        const effectiveShift = step % height; // avoid full rotations
+        const effectiveShift = step % height;
 
         for (let x = 0; x < width; x++) {
           const blockIndex = Math.floor(x / step);
@@ -391,7 +402,34 @@ Changelog:
         return new ImageData(outData, width, height);
       }
 
-      // ---- Mode UI toggle -----------------------------------------------
+      // Horizontal Shift transform
+      function transformHorizontalShift(imageData, shiftSize) {
+        const { data, width, height } = imageData;
+        const outData = new Uint8ClampedArray(data.length);
+
+        const step = Math.max(1, Math.floor(shiftSize));
+        const effectiveShift = step % width;
+
+        for (let y = 0; y < height; y++) {
+          const blockIndex = Math.floor(y / step);
+          const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
+
+          for (let x = 0; x < width; x++) {
+            const srcX = (x - direction + width) % width;
+            const srcOffset = (y * width + srcX) * 4;
+            const dstOffset = (y * width + x) * 4;
+
+            outData[dstOffset]     = data[srcOffset];
+            outData[dstOffset + 1] = data[srcOffset + 1];
+            outData[dstOffset + 2] = data[srcOffset + 2];
+            outData[dstOffset + 3] = data[srcOffset + 3];
+          }
+        }
+
+        return new ImageData(outData, width, height);
+      }
+
+      // Mode UI toggle
       modeSelect.addEventListener('change', () => {
         const mode = modeSelect.value;
         if (mode === 'sand') {
@@ -401,11 +439,60 @@ Changelog:
         } else {
           moundsLabel.style.display = 'none';
           shiftLabel.style.display = '';
-          setStatus('Vertical Shift mode: columns shift up/down in blocks.');
+          if (mode === 'verticalShift') {
+            setStatus('Vertical Shift mode: column blocks shift up/down.');
+          } else {
+            setStatus('Horizontal Shift mode: row blocks shift left/right.');
+          }
         }
       });
 
-      // ---- Image loading -------------------------------------------------
+      // Draw image (shared for load + restore)
+      function drawImageFromSrc(src) {
+        const img = new Image();
+        img.onload = () => {
+          const maxSide = 800;
+          let { width, height } = img;
+
+          if (width > maxSide || height > maxSide) {
+            const scale = Math.min(maxSide / width, maxSide / height);
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+          }
+
+          originalCanvas.width  = width;
+          originalCanvas.height = height;
+          outputCanvas.width    = width;
+          outputCanvas.height   = height;
+
+          originalCtx.clearRect(0, 0, width, height);
+          outputCtx.clearRect(0, 0, width, height);
+
+          originalCtx.drawImage(img, 0, 0, width, height);
+          lastImageData = originalCtx.getImageData(0, 0, width, height);
+
+          imageLoaded = true;
+          downloadBtn.disabled = true;
+          setStatus('Image ready. Choose mode and parameters, then click "Apply".');
+        };
+        img.src = src;
+      }
+
+      // Restore last image from localStorage (if available)
+      const savedUrl = localStorage.getItem(STORAGE_KEY);
+      if (savedUrl) {
+        try {
+          drawImageFromSrc(savedUrl);
+          setStatus('Restored last image from previous session.');
+        } catch (e) {
+          console.warn('Could not restore saved image:', e);
+          setStatus('Load an image to get started.');
+        }
+      } else {
+        setStatus('Load an image to get started.');
+      }
+
+      // Image loading from file input
       fileInput.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (!file) return;
@@ -413,33 +500,13 @@ Changelog:
         const reader = new FileReader();
 
         reader.onload = (e) => {
-          const img = new Image();
-          img.onload = () => {
-            const maxSide = 800;
-            let { width, height } = img;
-
-            if (width > maxSide || height > maxSide) {
-              const scale = Math.min(maxSide / width, maxSide / height);
-              width = Math.round(width * scale);
-              height = Math.round(height * scale);
-            }
-
-            originalCanvas.width  = width;
-            originalCanvas.height = height;
-            outputCanvas.width    = width;
-            outputCanvas.height   = height;
-
-            originalCtx.clearRect(0, 0, width, height);
-            outputCtx.clearRect(0, 0, width, height);
-
-            originalCtx.drawImage(img, 0, 0, width, height);
-            lastImageData = originalCtx.getImageData(0, 0, width, height);
-
-            imageLoaded = true;
-            downloadBtn.disabled = true;
-            setStatus('Image loaded. Choose mode and parameters, then click "Apply".');
-          };
-          img.src = e.target.result;
+          const dataUrl = e.target.result;
+          try {
+            localStorage.setItem(STORAGE_KEY, dataUrl);
+          } catch (err) {
+            console.warn('Could not store image in localStorage (maybe too large):', err);
+          }
+          drawImageFromSrc(dataUrl);
         };
 
         reader.onerror = () => {
@@ -450,7 +517,7 @@ Changelog:
         setStatus('Reading image...');
       });
 
-      // ---- Apply button --------------------------------------------------
+      // Apply button
       applyBtn.addEventListener('click', () => {
         if (!imageLoaded || !lastImageData) {
           alert('Please load an image first.');
@@ -466,9 +533,12 @@ Changelog:
             if (mode === 'sand') {
               const moundCount = parseInt(moundsSelect.value, 10) || 2;
               result = transformToSandLayout(lastImageData, moundCount);
-            } else {
+            } else if (mode === 'verticalShift') {
               const shiftSize = parseInt(shiftSizeInput.value, 10) || 1;
               result = transformVerticalShift(lastImageData, shiftSize);
+            } else {
+              const shiftSize = parseInt(shiftSizeInput.value, 10) || 1;
+              result = transformHorizontalShift(lastImageData, shiftSize);
             }
 
             outputCtx.putImageData(result, 0, 0);
@@ -481,16 +551,13 @@ Changelog:
         }, 30);
       });
 
-      // ---- Download button ----------------------------------------------
+      // Download button
       downloadBtn.addEventListener('click', () => {
         const link = document.createElement('a');
         link.download = 'pixel-shuffler-output.png';
         link.href = outputCanvas.toDataURL('image/png');
         link.click();
       });
-
-      // Initial status
-      setStatus('Load an image to get started.');
     };
   </script>
 </body>
