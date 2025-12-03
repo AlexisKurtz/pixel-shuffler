@@ -1,23 +1,22 @@
 <!--
 Pixel Shuffler - Sand Layers + Vertical Shift
-Version: 0.10.0
+Version: 0.10.1
 
 Changelog:
+- 0.10.1
+  - Removed reliance on the Apply button being disabled/enabled.
+    Apply is now always clickable; we guard with a runtime check to ensure
+    an image is loaded before processing. This avoids cases where the button
+    could remain greyed out due to script or load issues.
 - 0.10.0
-  - Added a new "Vertical Shift" mode:
-      * True pixel displacement effect.
-      * Columns are processed in horizontal blocks of size X pixels (user-defined).
-      * For each block:
-          - First block: shift its columns UP by X pixels (with vertical wrap).
-          - Next block: shift its columns DOWN by X pixels.
-          - Alternating up/down until the right edge of the image.
-      * No pixel is created or removed; it's a pure rearrangement.
+  - Added "Vertical Shift" mode:
+      * Columns processed in horizontal blocks of size X (user-defined).
+      * Blocks alternate: UP by X, DOWN by X (vertical wrap).
+      * Pure pixel rearrangement, no creation/removal.
 - 0.9.1
-  - Simplified color sorting in Sand Layout mode to brightness-only (V in HSV),
-    producing clearer stacked layers from dark to light.
+  - Brightness-only sorting in Sand Layout mode.
 - 0.9.0
-  - Introduced mound-shaped layout and mapping of original pixels (sorted by HSV)
-    to positions sorted by stack position t (Sand Layout mode).
+  - Mound-shaped layout for Sand Layout mode.
 -->
 
 <!DOCTYPE html>
@@ -93,11 +92,6 @@ Changelog:
 
     button:hover {
       background: #333;
-    }
-
-    button:disabled {
-      opacity: 0.4;
-      cursor: default;
     }
 
     input[type="number"] {
@@ -187,7 +181,7 @@ Changelog:
         <input type="number" id="shiftSizeInput" min="1" max="500" value="20" />
       </label>
 
-      <button id="applyBtn" disabled>Apply</button>
+      <button id="applyBtn">Apply</button>
       <button id="downloadBtn" disabled>Download Result</button>
 
       <span class="status" id="statusText"></span>
@@ -211,226 +205,3 @@ Changelog:
   </div>
 
   <script>
-    // ---- Version ---------------------------------------------------------
-    const APP_VERSION = '0.10.0';
-    document.querySelector('.js-version-inline').textContent = `· v${APP_VERSION}`;
-    document.querySelector('.js-version-footer').textContent = APP_VERSION;
-
-    // ---- DOM elements ----------------------------------------------------
-    const fileInput      = document.getElementById('fileInput');
-    const modeSelect     = document.getElementById('modeSelect');
-    const moundsLabel    = document.getElementById('moundsLabel');
-    const moundsSelect   = document.getElementById('moundsSelect');
-    const shiftLabel     = document.getElementById('shiftLabel');
-    const shiftSizeInput = document.getElementById('shiftSizeInput');
-    const applyBtn       = document.getElementById('applyBtn');
-    const downloadBtn    = document.getElementById('downloadBtn');
-    const statusText     = document.getElementById('statusText');
-
-    const originalCanvas = document.getElementById('originalCanvas');
-    const outputCanvas   = document.getElementById('outputCanvas');
-    const originalCtx    = originalCanvas.getContext('2d');
-    const outputCtx      = outputCanvas.getContext('2d');
-
-    let imageLoaded = false;
-    let lastImageData = null;
-
-    // ---- Helpers ---------------------------------------------------------
-
-    function setStatus(msg) {
-      statusText.textContent = msg || '';
-    }
-
-    // RGB -> HSV helper (h: 0–360, s: 0–1, v: 0–1)
-    function rgbToHsv(r, g, b) {
-      r /= 255;
-      g /= 255;
-      b /= 255;
-
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const d   = max - min;
-
-      let h = 0;
-      const v = max;
-      const s = max === 0 ? 0 : d / max;
-
-      if (d !== 0) {
-        if (max === r) {
-          h = ((g - b) / d) % 6;
-        } else if (max === g) {
-          h = (b - r) / d + 2;
-        } else {
-          h = (r - g) / d + 4;
-        }
-        h *= 60;
-        if (h < 0) h += 360;
-      }
-
-      return { h, s, v };
-    }
-
-    // Generate a normalized mound profile: for each x, a value in [0, 1]
-    function generateMoundProfile(width, moundCount) {
-      const m = Math.max(1, Math.min(6, moundCount));
-      const centers = [];
-      const amplitudes = [];
-      const sigmas = [];
-
-      // Spread centers evenly across width
-      for (let i = 0; i < m; i++) {
-        const centerX = (i + 0.5) * (width / m);
-        centers.push(centerX);
-      }
-
-      // Random-ish amplitudes and widths for variety
-      for (let i = 0; i < m; i++) {
-        const amp = 0.6 + Math.random() * 0.3;  // normalized height in [0.6, 0.9]
-        amplitudes.push(amp);
-        const sigma = width / (m * 2.5);       // spread of each mound
-        sigmas.push(sigma);
-      }
-
-      const profile = new Float32Array(width);
-
-      for (let x = 0; x < width; x++) {
-        let hNorm = 0;
-        for (let i = 0; i < m; i++) {
-          const dx = x - centers[i];
-          const s = sigmas[i];
-          const gauss = amplitudes[i] * Math.exp(-0.5 * (dx * dx) / (s * s));
-          if (gauss > hNorm) hNorm = gauss;
-        }
-        if (hNorm > 1) hNorm = 1;
-        profile[x] = hNorm;
-      }
-
-      return profile;
-    }
-
-    // ---- Sand Layout transform (existing mode) ---------------------------
-
-    function transformToSandLayout(imageData, moundCount) {
-      const { data, width, height } = imageData;
-      const numPixels = width * height;
-
-      // 1) Extract pixels and compute brightness (V)
-      const pixels = new Array(numPixels);
-      for (let i = 0; i < numPixels; i++) {
-        const offset = i * 4;
-        const r = data[offset];
-        const g = data[offset + 1];
-        const b = data[offset + 2];
-        const a = data[offset + 3];
-
-        const { v } = rgbToHsv(r, g, b);
-        pixels[i] = { r, g, b, a, v };
-      }
-
-      // 2) Sort pixels only by brightness: dark -> light
-      pixels.sort((p1, p2) => p1.v - p2.v);
-
-      // 3) Build mound profile (normalized heights)
-      const profile = generateMoundProfile(width, moundCount);
-
-      // 4) For each output position, compute a "stack position" t in [0, 1]
-      const coords = new Array(numPixels);
-      const insideWeight = 0.88; // portion of t-range used inside mounds
-
-      for (let y = 0; y < height; y++) {
-        const yFromBottom = (height - 1) - y; // 0 at bottom, increasing upward
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
-          const hNorm = profile[x];        // 0..1
-          const moundHeight = hNorm * (height - 1);
-          let t;
-
-          if (moundHeight > 1 && yFromBottom <= moundHeight) {
-            // Inside mound area
-            const tInside = moundHeight <= 0 ? 0 : (yFromBottom / moundHeight); // 0 bottom, 1 top of mound
-            t = tInside * insideWeight; // use [0, insideWeight] for mound interior
-          } else {
-            // Above mound (sky / background area)
-            const remainingHeight = (height - 1) - moundHeight;
-            if (remainingHeight <= 0) {
-              t = insideWeight;
-            } else {
-              const yAbove = yFromBottom - moundHeight;
-              const tOutside = Math.max(0, Math.min(1, yAbove / remainingHeight));
-              t = insideWeight + tOutside * (1 - insideWeight); // use [insideWeight, 1] for sky
-            }
-          }
-
-          coords[idx] = { x, y, t };
-        }
-      }
-
-      // 5) Sort coordinates by t (bottom of mounds -> top -> sky)
-      coords.sort((c1, c2) => c1.t - c2.t);
-
-      // 6) Create new image data and assign pixels according to sorted order
-      const outData = new Uint8ClampedArray(data.length);
-
-      for (let i = 0; i < numPixels; i++) {
-        const { x, y } = coords[i];
-        const p = pixels[i];
-        const offset = (y * width + x) * 4;
-
-        outData[offset]     = p.r;
-        outData[offset + 1] = p.g;
-        outData[offset + 2] = p.b;
-        outData[offset + 3] = p.a;
-      }
-
-      return new ImageData(outData, width, height);
-    }
-
-    // ---- Vertical Shift transform (new mode) -----------------------------
-
-    function transformVerticalShift(imageData, shiftSize) {
-      const { data, width, height } = imageData;
-      const outData = new Uint8ClampedArray(data.length);
-
-      const step = Math.max(1, Math.floor(shiftSize));
-      const effectiveShift = step % height; // avoid useless full rotations
-
-      for (let x = 0; x < width; x++) {
-        const blockIndex = Math.floor(x / step);
-        const direction = (blockIndex % 2 === 0) ? -effectiveShift : effectiveShift;
-        // direction > 0 => shift DOWN by 'direction' pixels
-        // direction < 0 => shift UP   by |direction| pixels
-
-        for (let y = 0; y < height; y++) {
-          const srcY = (y - direction + height) % height; // wrap vertically
-
-          const srcOffset = (srcY * width + x) * 4;
-          const dstOffset = (y * width + x) * 4;
-
-          outData[dstOffset]     = data[srcOffset];
-          outData[dstOffset + 1] = data[srcOffset + 1];
-          outData[dstOffset + 2] = data[srcOffset + 2];
-          outData[dstOffset + 3] = data[srcOffset + 3];
-        }
-      }
-
-      return new ImageData(outData, width, height);
-    }
-
-    // ---- Mode UI toggle --------------------------------------------------
-
-    modeSelect.addEventListener('change', () => {
-      const mode = modeSelect.value;
-      if (mode === 'sand') {
-        moundsLabel.style.display = '';
-        shiftLabel.style.display = 'none';
-        setStatus('Sand Layout mode: pixels reordered into mound-shaped layers.');
-      } else {
-        moundsLabel.style.display = 'none';
-        shiftLabel.style.display = '';
-        setStatus('Vertical Shift mode: columns zig-zag up/down by the selected size.');
-      }
-    });
-
-    // ---- Image loading ---------------------------------------------------
-
-    fileInput.addEventListener('chan
